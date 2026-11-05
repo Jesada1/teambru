@@ -51,17 +51,31 @@ body {
   border-radius: 999px;
 }
 
-/* Diagonal striped lunch / break slot */
+/* Full-width timetable CSS grid */
+.timetable-grid {
+  width: 100%;
+  min-width: 0;
+}
+
+.timetable-cell {
+  min-width: 0;
+}
+
+/* Unified lunch / break slot */
 .break-slot {
-  background-color: rgb(24 24 27 / 0.4);
+  background-color: rgb(39 39 42 / 0.6); /* zinc-800/60 */
   background-image: repeating-linear-gradient(
     -45deg,
     transparent,
-    transparent 6px,
-    rgb(255 255 255 / 0.07) 6px,
-    rgb(255 255 255 / 0.07) 12px
+    transparent 7px,
+    rgb(255 255 255 / 0.04) 7px,
+    rgb(255 255 255 / 0.04) 14px
   );
-  border-style: dashed;
+  border-color: rgb(63 63 70 / 0.5); /* zinc-700/50 */
+  border-style: solid;
+  border-width: 0 0 1px 0;
+  color: rgb(161 161 170); /* zinc-400 */
+  font-weight: 500;
 }
 
 /* —— Official academic print stylesheet —— */
@@ -145,15 +159,19 @@ body {
     padding: 4px 0 !important;
   }
 
-  .print-schedule table {
+  .print-schedule table,
+  .print-schedule .timetable-grid {
     width: 100% !important;
     border-collapse: collapse !important;
     font-size: 8pt !important;
     color: #000 !important;
+    gap: 0 !important;
+    background: #fff !important;
   }
 
   .print-schedule th,
-  .print-schedule td {
+  .print-schedule td,
+  .print-schedule .timetable-grid > div {
     border: 1px solid #000 !important;
     background: #fff !important;
     color: #000 !important;
@@ -168,9 +186,11 @@ body {
   }
 
   .print-schedule td button,
-  .print-schedule .print-grid button {
+  .print-schedule .print-grid button,
+  .print-schedule .timetable-cell button {
     display: block !important;
     width: 100%;
+    height: auto !important;
     border: 1px solid #000 !important;
     background: #fff !important;
     color: #000 !important;
@@ -181,7 +201,8 @@ body {
     break-inside: avoid;
   }
 
-  .print-schedule td button * {
+  .print-schedule td button *,
+  .print-schedule .timetable-cell button * {
     color: #000 !important;
   }
 

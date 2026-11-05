@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowLeftRight,
   CalendarPlus,
@@ -125,9 +132,9 @@ function toMinutes(hm: string): number {
   return h * 60 + m;
 }
 
-/** Fixed lunch/break: Period 5 or a slot overlapping 12:00–13:00 */
+/** Fixed lunch/break: Periods 4–5, or any slot overlapping 12:00–13:00 */
 function isBreakPeriod(timeSlots: TimeSlot[], period: number): boolean {
-  if (period === 5) return true;
+  if (period === 4 || period === 5) return true;
   const slot = timeSlots.find((s) => s.period === period);
   if (!slot) return false;
   const start = toMinutes(slot.startTime);
@@ -136,6 +143,54 @@ function isBreakPeriod(timeSlots: TimeSlot[], period: number): boolean {
   const lunchStart = 12 * 60;
   const lunchEnd = 13 * 60;
   return start < lunchEnd && end > lunchStart;
+}
+
+type TimetableDisplayRow =
+  | { type: "period"; period: number; rowIndex: number }
+  | {
+      type: "break";
+      periods: number[];
+      rowIndex: number;
+      startTime: string;
+      endTime: string;
+    };
+
+/** Collapse consecutive break periods (e.g. P4+P5) into one display row */
+function buildDisplayRows(
+  periods: number[],
+  timeSlots: TimeSlot[]
+): TimetableDisplayRow[] {
+  const rows: TimetableDisplayRow[] = [];
+  let rowIndex = 0;
+  let i = 0;
+  while (i < periods.length) {
+    const period = periods[i]!;
+    if (isBreakPeriod(timeSlots, period)) {
+      const run: number[] = [period];
+      while (
+        i + 1 < periods.length &&
+        isBreakPeriod(timeSlots, periods[i + 1]!)
+      ) {
+        i += 1;
+        run.push(periods[i]!);
+      }
+      const first = timeSlots.find((s) => s.period === run[0]);
+      const last = timeSlots.find((s) => s.period === run[run.length - 1]);
+      rows.push({
+        type: "break",
+        periods: run,
+        rowIndex,
+        startTime: first?.startTime ?? "",
+        endTime: last?.endTime ?? "",
+      });
+      rowIndex += 1;
+    } else {
+      rows.push({ type: "period", period, rowIndex });
+      rowIndex += 1;
+    }
+    i += 1;
+  }
+  return rows;
 }
 
 function sameLessonBlock(a: ScheduleAssignment, b: ScheduleAssignment): boolean {
@@ -383,6 +438,18 @@ export function ScheduleDashboard({
       buildMergedBlocks(filteredAssignments, periods, input.timeSlots),
     [filteredAssignments, periods, input.timeSlots]
   );
+
+  const displayRows = useMemo(
+    () => buildDisplayRows(periods, input.timeSlots),
+    [periods, input.timeSlots]
+  );
+
+  const gridColsClass =
+    visibleDays.length === 1
+      ? "grid-cols-[90px_minmax(0,1fr)]"
+      : visibleDays.length === 5
+        ? "grid-cols-[90px_repeat(5,minmax(0,1fr))]"
+        : `grid-cols-[90px_repeat(${visibleDays.length},minmax(0,1fr))]`;
 
   const tabs: Array<{ id: ScheduleViewMode; labelKey: TranslationKey }> = [
     { id: "teacher", labelKey: "dash.tab.teacher" },
@@ -1035,7 +1102,7 @@ export function ScheduleDashboard({
       </section>
 
       {/* Weekly grid */}
-      <section className="print-grid overflow-hidden rounded-lg border border-zinc-200/80 bg-white">
+      <section className="print-grid w-full overflow-hidden rounded-lg border border-zinc-200/80 bg-white">
         <div className="flex items-center justify-between gap-2 border-b border-zinc-200/80 px-3 py-2">
           <div>
             <h2 className="text-sm font-bold tracking-tight text-zinc-900">
@@ -1091,188 +1158,214 @@ export function ScheduleDashboard({
             onAction={clearFilter}
           />
         ) : (
-          <div className="overflow-x-auto scrollbar-thin">
-            <table className="min-w-full border-collapse text-left text-sm md:min-w-[720px]">
-              <thead>
-                <tr className="bg-zinc-50/80">
-                  <th className="sticky left-0 z-10 border-b border-r border-zinc-200/80 bg-zinc-50/95 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-400 sm:px-3">
-                    {t("dash.period")}
-                  </th>
-                  {visibleDays.map((day) => (
-                    <th
-                      key={day}
-                      className="border-b border-zinc-200/80 px-2 py-2 text-center text-xs font-semibold tracking-wider text-zinc-500"
-                    >
-                      {t(DAY_KEYS[day])}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {periods.map((period) => {
-                  const meta = periodMeta(input.timeSlots, period);
-                  const breakRow = isBreakPeriod(input.timeSlots, period);
-                  if (breakRow) {
-                    return (
-                      <tr key={period} className="align-middle">
-                        <th className="sticky left-0 z-10 border-b border-r border-zinc-200/80 bg-zinc-900/40 px-2 py-2 text-left sm:px-3">
-                          <span className="block text-xs font-bold tracking-tight text-zinc-100">
-                            {meta.title}
-                          </span>
-                          <span className="block text-[11px] font-medium text-zinc-300">
-                            {meta.range}
-                          </span>
-                        </th>
-                        <td
-                          colSpan={visibleDays.length}
-                          className="break-slot border-b border-dashed border-zinc-500/50 px-3 py-2 text-center"
-                        >
-                          <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-200">
-                            <Coffee className="h-3.5 w-3.5 shrink-0" />
-                            {t("dash.breakLabel")}
-                            {meta.range ? (
-                              <span className="font-medium normal-case tracking-normal text-zinc-400">
-                                {meta.range}
-                              </span>
-                            ) : null}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  }
+          <div className="w-full overflow-x-auto scrollbar-thin">
+            <div
+              className={`timetable-grid w-full min-w-0 gap-px bg-zinc-200/70 ${gridColsClass}`}
+              style={{
+                display: "grid",
+                gridAutoRows: "minmax(80px, auto)",
+              }}
+            >
+              {/* Header */}
+              <div className="sticky left-0 z-10 flex items-center border-b border-zinc-200/80 bg-zinc-50 px-2 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                {t("dash.period")}
+              </div>
+              {visibleDays.map((day) => (
+                <div
+                  key={`h-${day}`}
+                  className="flex items-center justify-center border-b border-zinc-200/80 bg-zinc-50 px-2 py-2 text-center text-xs font-semibold tracking-wider text-zinc-500"
+                >
+                  {t(DAY_KEYS[day])}
+                </div>
+              ))}
 
+              {displayRows.map((row) => {
+                const gridRow = row.rowIndex + 2;
+
+                if (row.type === "break") {
+                  const label =
+                    row.periods.length > 1
+                      ? `P${row.periods[0]}–P${row.periods[row.periods.length - 1]}`
+                      : `P${row.periods[0]}`;
+                  const range =
+                    row.startTime && row.endTime
+                      ? `${row.startTime}–${row.endTime}`
+                      : "";
                   return (
-                    <tr key={period} className="align-top">
-                      <th className="sticky left-0 z-10 border-b border-r border-zinc-200/80 bg-white px-3 py-2 text-left">
-                        <span className="block text-xs font-bold tracking-tight text-zinc-800">
-                          {meta.title}
+                    <Fragment key={`break-${row.periods.join("-")}`}>
+                      <div
+                        className="break-slot sticky left-0 z-10 flex min-h-[56px] flex-col justify-center px-2 py-2"
+                        style={{ gridRow, gridColumn: 1 }}
+                      >
+                        <span className="text-xs font-semibold tracking-tight text-zinc-300">
+                          {label}
                         </span>
-                        <span className="block text-[11px] font-medium text-zinc-400">
-                          {meta.range}
+                        {range ? (
+                          <span className="text-[11px] font-medium text-zinc-400">
+                            {range}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div
+                        className="break-slot flex min-h-[56px] items-center justify-center px-3 py-2"
+                        style={{
+                          gridRow,
+                          gridColumn: `2 / span ${visibleDays.length}`,
+                        }}
+                      >
+                        <span className="inline-flex items-center gap-2 text-xs font-medium tracking-wide text-zinc-400">
+                          <Coffee className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                          {t("dash.breakLabel")}
+                          {range ? (
+                            <span className="font-medium text-zinc-500">
+                              {range}
+                            </span>
+                          ) : null}
                         </span>
-                      </th>
-                      {visibleDays.map((day) => {
-                        const cellKey = `${day}|${period}`;
-                        // Desktop rowspan: skip cells covered by a multi-period block
-                        if (!isMobile && coveredKeys.has(cellKey)) return null;
-
-                        const merged = blocksByStart.get(cellKey);
-                        const cells = cellMap.get(cellKey) ?? [];
-                        const isInvalidTarget = invalidTargetKey === cellKey;
-                        const rowSpan =
-                          !isMobile && merged ? merged.span : 1;
-                        const useMergedCard = !isMobile && Boolean(merged);
-
-                        return (
-                          <td
-                            key={`${day}-${period}`}
-                            rowSpan={rowSpan > 1 ? rowSpan : undefined}
-                            className={`border-b border-zinc-100 px-1 py-1 sm:px-1.5 sm:py-1.5 ${
-                              isInvalidTarget
-                                ? "bg-rose-500/10 ring-2 ring-inset ring-rose-500/60"
-                                : ""
-                            }`}
-                          >
-                            {useMergedCard && merged ? (
-                              <SlotCard
-                                assignment={merged.assignment}
-                                subject={subjectsById.get(
-                                  merged.assignment.subjectId
-                                )}
-                                teacher={teachersById.get(
-                                  merged.assignment.teacherId
-                                )}
-                                room={roomsById.get(merged.assignment.roomId)}
-                                group={groupsById.get(
-                                  merged.assignment.classGroupId
-                                )}
-                                span={merged.span}
-                                minHeightClass={
-                                  rowSpan >= 3
-                                    ? "min-h-[13.5rem]"
-                                    : rowSpan === 2
-                                      ? "min-h-[9rem]"
-                                      : "min-h-[48px] md:min-h-[5.25rem]"
-                                }
-                                isSource={
-                                  swapSourceId === merged.assignment.id ||
-                                  merged.memberIds.includes(swapSourceId ?? "")
-                                }
-                                isTargetCandidate={Boolean(
-                                  swapSourceId &&
-                                    !merged.memberIds.includes(swapSourceId)
-                                )}
-                                isInvalid={isInvalidTarget}
-                                invalidReason={invalidReason}
-                                onClick={() =>
-                                  onSlotCardClick(merged.assignment)
-                                }
-                                onDoubleClick={() =>
-                                  setDetail({
-                                    assignment: merged.assignment,
-                                  })
-                                }
-                              />
-                            ) : cells.length === 0 ? (
-                              <button
-                                type="button"
-                                disabled={!swapSourceId}
-                                onClick={() => onEmptyCellClick(day, period)}
-                                className={`flex min-h-[48px] w-full items-center justify-center rounded-md border border-dashed transition-transform duration-150 md:min-h-[5.25rem] ${
-                                  isInvalidTarget
-                                    ? "border-rose-400 bg-rose-500/15 text-rose-700"
-                                    : swapSourceId
-                                      ? "border-emerald-400/50 bg-emerald-500/5 text-emerald-700 hover:border-emerald-500 hover:bg-emerald-500/10 active:scale-95"
-                                      : "cursor-default border-zinc-100 bg-zinc-50/50 text-transparent"
-                                }`}
-                                aria-label={
-                                  swapSourceId
-                                    ? t("dash.swap.moveHere")
-                                    : undefined
-                                }
-                              >
-                                {isInvalidTarget ? (
-                                  <span className="px-1 text-center text-[10px] font-semibold leading-snug">
-                                    {invalidReason}
-                                  </span>
-                                ) : swapSourceId ? (
-                                  <ArrowLeftRight className="h-4 w-4 shrink-0 opacity-70" />
-                                ) : null}
-                              </button>
-                            ) : (
-                              <div className="flex min-h-[48px] flex-col gap-1 md:min-h-[5.25rem]">
-                                {cells.map((a) => (
-                                  <SlotCard
-                                    key={a.id}
-                                    assignment={a}
-                                    subject={subjectsById.get(a.subjectId)}
-                                    teacher={teachersById.get(a.teacherId)}
-                                    room={roomsById.get(a.roomId)}
-                                    group={groupsById.get(a.classGroupId)}
-                                    span={1}
-                                    minHeightClass="min-h-[48px] md:min-h-[5.25rem]"
-                                    isSource={swapSourceId === a.id}
-                                    isTargetCandidate={Boolean(
-                                      swapSourceId && swapSourceId !== a.id
-                                    )}
-                                    isInvalid={isInvalidTarget}
-                                    invalidReason={invalidReason}
-                                    onClick={() => onSlotCardClick(a)}
-                                    onDoubleClick={() =>
-                                      setDetail({ assignment: a })
-                                    }
-                                  />
-                                ))}
-                              </div>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
+                      </div>
+                    </Fragment>
                   );
-                })}
-              </tbody>
-            </table>
+                }
+
+                const period = row.period;
+                const meta = periodMeta(input.timeSlots, period);
+
+                return (
+                  <Fragment key={`period-${period}`}>
+                    <div
+                      className="sticky left-0 z-10 flex min-h-[80px] flex-col justify-center border-b border-zinc-200/80 bg-white px-2 py-2"
+                      style={{ gridRow, gridColumn: 1 }}
+                    >
+                      <span className="text-xs font-bold tracking-tight text-zinc-800">
+                        {meta.title}
+                      </span>
+                      <span className="text-[11px] font-medium text-zinc-400">
+                        {meta.range}
+                      </span>
+                    </div>
+                    {visibleDays.map((day, dayIdx) => {
+                      const cellKey = `${day}|${period}`;
+                      if (!isMobile && coveredKeys.has(cellKey)) return null;
+
+                      const merged = blocksByStart.get(cellKey);
+                      const cells = cellMap.get(cellKey) ?? [];
+                      const isInvalidTarget = invalidTargetKey === cellKey;
+                      const rowSpan =
+                        !isMobile && merged && merged.span > 1
+                          ? merged.span
+                          : 1;
+                      const useMergedCard = !isMobile && Boolean(merged);
+                      const col = dayIdx + 2;
+
+                      return (
+                        <div
+                          key={`${day}-${period}`}
+                          className={`timetable-cell flex min-h-[80px] flex-col border-b border-r border-zinc-200/70 bg-white p-1 transition-colors hover:bg-zinc-50/90 sm:p-1.5 ${
+                            isInvalidTarget
+                              ? "bg-rose-500/10 ring-2 ring-inset ring-rose-500/60"
+                              : ""
+                          }`}
+                          style={{
+                            gridColumn: col,
+                            gridRow:
+                              rowSpan > 1
+                                ? `${gridRow} / span ${rowSpan}`
+                                : gridRow,
+                          }}
+                        >
+                          {useMergedCard && merged ? (
+                            <SlotCard
+                              assignment={merged.assignment}
+                              subject={subjectsById.get(
+                                merged.assignment.subjectId
+                              )}
+                              teacher={teachersById.get(
+                                merged.assignment.teacherId
+                              )}
+                              room={roomsById.get(merged.assignment.roomId)}
+                              group={groupsById.get(
+                                merged.assignment.classGroupId
+                              )}
+                              span={merged.span}
+                              minHeightClass="min-h-[80px] h-full w-full"
+                              isSource={
+                                swapSourceId === merged.assignment.id ||
+                                merged.memberIds.includes(swapSourceId ?? "")
+                              }
+                              isTargetCandidate={Boolean(
+                                swapSourceId &&
+                                  !merged.memberIds.includes(swapSourceId)
+                              )}
+                              isInvalid={isInvalidTarget}
+                              invalidReason={invalidReason}
+                              onClick={() =>
+                                onSlotCardClick(merged.assignment)
+                              }
+                              onDoubleClick={() =>
+                                setDetail({
+                                  assignment: merged.assignment,
+                                })
+                              }
+                            />
+                          ) : cells.length === 0 ? (
+                            <button
+                              type="button"
+                              disabled={!swapSourceId}
+                              onClick={() => onEmptyCellClick(day, period)}
+                              className={`flex h-full min-h-[80px] w-full items-center justify-center rounded-md border border-dashed transition-transform duration-150 ${
+                                isInvalidTarget
+                                  ? "border-rose-400 bg-rose-500/15 text-rose-700"
+                                  : swapSourceId
+                                    ? "border-emerald-400/50 bg-emerald-500/5 text-emerald-700 hover:border-emerald-500 hover:bg-emerald-500/10 active:scale-95"
+                                    : "cursor-default border-zinc-200/80 bg-zinc-50/40 text-transparent hover:border-zinc-300"
+                              }`}
+                              aria-label={
+                                swapSourceId
+                                  ? t("dash.swap.moveHere")
+                                  : undefined
+                              }
+                            >
+                              {isInvalidTarget ? (
+                                <span className="px-1 text-center text-[10px] font-semibold leading-snug">
+                                  {invalidReason}
+                                </span>
+                              ) : swapSourceId ? (
+                                <ArrowLeftRight className="h-4 w-4 shrink-0 opacity-70" />
+                              ) : null}
+                            </button>
+                          ) : (
+                            <div className="flex h-full min-h-[80px] w-full flex-col gap-1">
+                              {cells.map((a) => (
+                                <SlotCard
+                                  key={a.id}
+                                  assignment={a}
+                                  subject={subjectsById.get(a.subjectId)}
+                                  teacher={teachersById.get(a.teacherId)}
+                                  room={roomsById.get(a.roomId)}
+                                  group={groupsById.get(a.classGroupId)}
+                                  span={1}
+                                  minHeightClass="min-h-[80px] h-full w-full"
+                                  isSource={swapSourceId === a.id}
+                                  isTargetCandidate={Boolean(
+                                    swapSourceId && swapSourceId !== a.id
+                                  )}
+                                  isInvalid={isInvalidTarget}
+                                  invalidReason={invalidReason}
+                                  onClick={() => onSlotCardClick(a)}
+                                  onDoubleClick={() =>
+                                    setDetail({ assignment: a })
+                                  }
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </Fragment>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -1567,7 +1660,7 @@ function SlotCard({
       type="button"
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      className={`relative flex w-full flex-col justify-between rounded-md border px-2 py-2 text-left transition-transform duration-150 hover:brightness-[1.03] active:scale-95 touch-manipulation ${minHeightClass} ${SLOT_TYPE_STYLE[roomType]} ${
+      className={`relative flex h-full w-full flex-col justify-between rounded-md border p-2 text-left transition-all duration-150 hover:brightness-[1.03] hover:border-emerald-500/35 active:scale-95 touch-manipulation sm:p-2.5 ${minHeightClass} ${SLOT_TYPE_STYLE[roomType]} ${
         isSource
           ? "border-emerald-500 ring-2 ring-emerald-500/70 ring-offset-1 ring-offset-white"
           : ""
