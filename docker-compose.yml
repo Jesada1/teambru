@@ -1,0 +1,39 @@
+services:
+  timetable:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: teambru-timetable:offline
+    container_name: teambru-timetable
+    ports:
+      - "3000:3000"
+    environment:
+      # Fully offline / air-gapped operation
+      NODE_ENV: production
+      OFFLINE_MODE: "true"
+      NEXT_PUBLIC_OFFLINE_MODE: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      # Local SQLite path (no remote Postgres required)
+      DATABASE_URL: "file:./data/offline.db"
+      # Explicitly disable any outbound integrations
+      NO_PROXY: "*"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+    volumes:
+      # Persist optional local DB / exports inside the container FS
+      - timetable-data:/app/data
+    restart: unless-stopped
+    # No external network dependencies for the CSP engine
+    networks:
+      - offline_net
+
+volumes:
+  timetable-data:
+
+networks:
+  offline_net:
+    driver: bridge
+    # Compose creates an isolated bridge; app does not call the public internet
+    internal: false

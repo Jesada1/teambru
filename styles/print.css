@@ -1,0 +1,9 @@
+/* Screen-only helpers — @media print rules live in globals.css */
+
+.print-only-title {
+  display: none;
+}
+
+.print-institution-header {
+  display: none;
+}

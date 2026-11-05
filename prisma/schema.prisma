@@ -1,0 +1,155 @@
+// Prisma schema for AI Automatic Timetable Generator
+// Switch `provider` to "sqlite" and `url` to "file:./dev.db" for local-only setups.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DayOfWeek {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+}
+
+enum RoomType {
+  THEORY
+  LAB
+  SPECIFIC
+}
+
+enum ConstraintSeverity {
+  HARD
+  SOFT
+}
+
+model Teacher {
+  id                String   @id
+  name              String
+  maxHoursPerDay    Int      @default(6)
+  maxHoursPerWeek   Int
+  /// JSON array of TimeSlotId strings, e.g. ["MON_P1","FRI_P5"]
+  unavailableSlots  Json     @default("[]")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  subjects    Subject[]
+  assignments ScheduleAssignment[]
+}
+
+model Subject {
+  id                 String   @id
+  code               String
+  name               String
+  periodsPerWeek     Int
+  requiredRoomType   RoomType
+  assignedTeacherId  String
+  classGroupId       String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  assignedTeacher Teacher              @relation(fields: [assignedTeacherId], references: [id])
+  classGroup      ClassGroup           @relation(fields: [classGroupId], references: [id])
+  assignments     ScheduleAssignment[]
+
+  @@index([assignedTeacherId])
+  @@index([classGroupId])
+  @@index([code])
+}
+
+model Room {
+  id        String   @id
+  name      String
+  type      RoomType
+  capacity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments ScheduleAssignment[]
+}
+
+model ClassGroup {
+  id               String   @id
+  groupName        String
+  studentCount     Int
+  department       String
+  /// JSON array of parallel class-group ids
+  parallelGroupIds Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  subjects    Subject[]
+  assignments ScheduleAssignment[]
+}
+
+model TimeSlot {
+  id        String    @id // e.g. "MON_P1"
+  day       DayOfWeek
+  period    Int
+  startTime String
+  endTime   String
+
+  assignments ScheduleAssignment[]
+
+  @@unique([day, period])
+  @@index([day])
+}
+
+model ScheduleRun {
+  id                 String   @id @default(cuid())
+  seed               Int
+  hardConflictCount  Int      @default(0)
+  softPenaltyTotal   Float    @default(0)
+  fitnessScore       Float    @default(0)
+  elapsedMs          Int      @default(0)
+  createdAt          DateTime @default(now())
+
+  assignments ScheduleAssignment[]
+  conflicts   ConflictReport[]
+}
+
+model ScheduleAssignment {
+  id           String @id @default(cuid())
+  subjectId    String
+  teacherId    String
+  roomId       String
+  classGroupId String
+  timeSlotId   String
+  scheduleRunId String?
+
+  subject     Subject      @relation(fields: [subjectId], references: [id])
+  teacher     Teacher      @relation(fields: [teacherId], references: [id])
+  room        Room         @relation(fields: [roomId], references: [id])
+  classGroup  ClassGroup   @relation(fields: [classGroupId], references: [id])
+  timeSlot    TimeSlot     @relation(fields: [timeSlotId], references: [id])
+  scheduleRun ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: Cascade)
+
+  @@index([teacherId, timeSlotId])
+  @@index([roomId, timeSlotId])
+  @@index([classGroupId, timeSlotId])
+  @@index([scheduleRunId])
+}
+
+model ConflictReport {
+  id            String             @id @default(cuid())
+  code          String
+  severity      ConstraintSeverity
+  message       String
+  /// JSON string array of assignment ids
+  assignmentIds Json               @default("[]")
+  /// JSON object of optional entity ids for UI highlighting
+  entityIds     Json?
+  penalty       Float              @default(0)
+  scheduleRunId String?
+
+  scheduleRun ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleRunId])
+  @@index([severity, code])
+}

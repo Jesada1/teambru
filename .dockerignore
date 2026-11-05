@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.gitignore
+*.md
+!README_OFFLINE.md
+.env*
+npm-debug.log*
+Dockerfile*
+docker-compose*.yml
+client
+server
+**/*.test.ts
+**/*.spec.ts
+coverage
+.DS_Store
+Thumbs.db
