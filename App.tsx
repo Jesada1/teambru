@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { CheckCircle2, RotateCcw } from "lucide-react";
 import { FileUpload } from "./components/FileUpload";
+import { DashboardErrorBoundary } from "./components/DashboardErrorBoundary";
 import { ScheduleDashboard } from "./components/ScheduleDashboard";
 import {
   StepIndicator,
@@ -231,14 +232,16 @@ function AppShell() {
             }}
           />
         ) : scheduleResult && scheduleInput ? (
-          <ScheduleDashboard
-            result={scheduleResult}
-            input={scheduleInput}
-            onExportExcel={exportExcel}
-            onExportPdf={exportPdf}
-            onReset={resetToUpload}
-            onResultChange={setScheduleResult}
-          />
+          <DashboardErrorBoundary>
+            <ScheduleDashboard
+              result={scheduleResult}
+              input={scheduleInput}
+              onExportExcel={exportExcel}
+              onExportPdf={exportPdf}
+              onReset={resetToUpload}
+              onResultChange={setScheduleResult}
+            />
+          </DashboardErrorBoundary>
         ) : (
           <div className="mx-auto max-w-lg p-8">
             <div className="rounded-lg border border-zinc-200/80 bg-white p-6">

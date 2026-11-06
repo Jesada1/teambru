@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   ArrowLeftRight,
+  Bot,
   CalendarPlus,
   CalendarX,
   CheckCircle2,
@@ -22,6 +23,7 @@ import {
   RotateCcw,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Undo2,
   User,
   Users,
@@ -332,6 +334,11 @@ export function ScheduleDashboard({
   const [mobileDay, setMobileDay] = useState<DayOfWeek>("MON");
   const [isMobile, setIsMobile] = useState(false);
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
+  const [agentPrompt, setAgentPrompt] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<
+    "idle" | "applied" | "rollback" | "zero"
+  >("idle");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -446,10 +453,10 @@ export function ScheduleDashboard({
 
   const gridColsClass =
     visibleDays.length === 1
-      ? "grid-cols-[90px_minmax(0,1fr)]"
+      ? "grid-cols-[90px_1fr]"
       : visibleDays.length === 5
-        ? "grid-cols-[90px_repeat(5,minmax(0,1fr))]"
-        : `grid-cols-[90px_repeat(${visibleDays.length},minmax(0,1fr))]`;
+        ? "grid-cols-[90px_repeat(5,1fr)]"
+        : `grid-cols-[90px_repeat(${visibleDays.length},1fr)]`;
 
   const tabs: Array<{ id: ScheduleViewMode; labelKey: TranslationKey }> = [
     { id: "teacher", labelKey: "dash.tab.teacher" },
@@ -697,6 +704,63 @@ export function ScheduleDashboard({
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, past.length, future.length]);
 
+  const runAgent = useCallback(
+    async (promptOverride?: string) => {
+      const prompt = (promptOverride ?? agentPrompt).trim();
+      if (!prompt || agentBusy) return;
+      setAgentBusy(true);
+      try {
+        const res = await fetch("/api/schedule/agent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            input,
+            result: workingResult,
+          }),
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          error?: string;
+          message?: string;
+          status?: string;
+          result?: ScheduleResult;
+          hardConflictCount?: number;
+        };
+
+        if (!res.ok || !data.ok || !data.result) {
+          setAgentStatus("rollback");
+          pushToast(data.error || t("dash.agent.fail"), "error");
+          return;
+        }
+
+        setPast((p) => [...p, workingRef.current].slice(-HISTORY_LIMIT));
+        setFuture([]);
+        workingRef.current = data.result;
+        publishResult(data.result);
+        setAgentStatus(
+          data.result.hardConflictCount === 0 ? "zero" : "applied"
+        );
+        pushToast(data.message || t("dash.agent.applied"), "success");
+        if (promptOverride) setAgentPrompt(promptOverride);
+      } catch {
+        setAgentStatus("rollback");
+        pushToast(t("dash.agent.fail"), "error");
+      } finally {
+        setAgentBusy(false);
+      }
+    },
+    [
+      agentPrompt,
+      agentBusy,
+      input,
+      workingResult,
+      publishResult,
+      pushToast,
+      t,
+    ]
+  );
+
   const handleExportIcs = () => {
     if (view !== "teacher" || !activeEntityId) return;
     const teacherAssignments = workingResult.assignments.filter(
@@ -859,6 +923,89 @@ export function ScheduleDashboard({
             {invalidReason}
           </p>
         ) : null}
+
+        {/* Natural-language AI Agent bar */}
+        <div className="no-print rounded-lg border border-zinc-200/80 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Bot className="h-4 w-4 shrink-0 text-emerald-600" />
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+                {t("dash.agent.title")}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span
+                className={
+                  workingResult.hardConflictCount === 0
+                    ? "inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-700"
+                    : "inline-flex items-center rounded-md border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-700"
+                }
+              >
+                <CheckCircle2 className="mr-1 h-3.5 w-3.5 shrink-0" />
+                {workingResult.hardConflictCount === 0
+                  ? t("dash.agent.zero")
+                  : t("dash.hardConflicts", {
+                      count: workingResult.hardConflictCount,
+                    })}
+              </span>
+              {agentStatus === "applied" || agentStatus === "zero" ? (
+                <span className="inline-flex items-center rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                  <Sparkles className="mr-1 h-3.5 w-3.5 shrink-0" />
+                  {t("dash.agent.applied")}
+                </span>
+              ) : null}
+              {agentStatus === "rollback" ? (
+                <span className="inline-flex items-center rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                  {t("dash.agent.rollback")}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              value={agentPrompt}
+              onChange={(e) => setAgentPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void runAgent();
+              }}
+              placeholder={t("dash.agent.placeholder")}
+              className="min-h-[44px] w-full flex-1 rounded-md border border-zinc-200/80 bg-zinc-50 px-3 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-600/15"
+            />
+            <button
+              type="button"
+              disabled={agentBusy || !agentPrompt.trim()}
+              onClick={() => void runAgent()}
+              className="inline-flex min-h-[44px] items-center justify-center rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Sparkles className="mr-2 h-4 w-4 shrink-0" />
+              {agentBusy ? t("dash.agent.running") : t("dash.agent.run")}
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {(
+              [
+                "dash.agent.chip.sub",
+                "dash.agent.chip.swap",
+                "dash.agent.chip.lock",
+              ] as const
+            ).map((key) => (
+              <button
+                key={key}
+                type="button"
+                disabled={agentBusy}
+                onClick={() => {
+                  const chip = t(key);
+                  setAgentPrompt(chip);
+                  void runAgent(chip);
+                }}
+                className="rounded-md border border-zinc-200/80 bg-zinc-50 px-2.5 py-1.5 text-[11px] font-medium text-zinc-600 transition-transform hover:bg-zinc-100 active:scale-95 disabled:opacity-40"
+              >
+                {t(key)}
+              </button>
+            ))}
+          </div>
+        </div>
       </header>
 
       {/* KPI bento */}
@@ -1163,7 +1310,7 @@ export function ScheduleDashboard({
               className={`timetable-grid w-full min-w-0 gap-px bg-zinc-200/70 ${gridColsClass}`}
               style={{
                 display: "grid",
-                gridAutoRows: "minmax(80px, auto)",
+                gridAutoRows: "minmax(85px, auto)",
               }}
             >
               {/* Header */}
@@ -1233,7 +1380,7 @@ export function ScheduleDashboard({
                 return (
                   <Fragment key={`period-${period}`}>
                     <div
-                      className="sticky left-0 z-10 flex min-h-[80px] flex-col justify-center border-b border-zinc-200/80 bg-white px-2 py-2"
+                      className="sticky left-0 z-10 flex min-h-[85px] flex-col justify-center border-b border-zinc-200/80 bg-white px-2 py-2"
                       style={{ gridRow, gridColumn: 1 }}
                     >
                       <span className="text-xs font-bold tracking-tight text-zinc-800">
@@ -1260,7 +1407,7 @@ export function ScheduleDashboard({
                       return (
                         <div
                           key={`${day}-${period}`}
-                          className={`timetable-cell flex min-h-[80px] flex-col border-b border-r border-zinc-200/70 bg-white p-1 transition-colors hover:bg-zinc-50/90 sm:p-1.5 ${
+                          className={`timetable-cell flex min-h-[85px] flex-col border-b border-r border-zinc-200/70 bg-white p-1 transition-colors hover:bg-zinc-50/90 sm:p-1.5 ${
                             isInvalidTarget
                               ? "bg-rose-500/10 ring-2 ring-inset ring-rose-500/60"
                               : ""
@@ -1287,7 +1434,7 @@ export function ScheduleDashboard({
                                 merged.assignment.classGroupId
                               )}
                               span={merged.span}
-                              minHeightClass="min-h-[80px] h-full w-full"
+                              minHeightClass="min-h-[85px] h-full w-full"
                               isSource={
                                 swapSourceId === merged.assignment.id ||
                                 merged.memberIds.includes(swapSourceId ?? "")
@@ -1312,7 +1459,7 @@ export function ScheduleDashboard({
                               type="button"
                               disabled={!swapSourceId}
                               onClick={() => onEmptyCellClick(day, period)}
-                              className={`flex h-full min-h-[80px] w-full items-center justify-center rounded-md border border-dashed transition-transform duration-150 ${
+                              className={`flex h-full min-h-[85px] w-full items-center justify-center rounded-md border border-dashed transition-transform duration-150 ${
                                 isInvalidTarget
                                   ? "border-rose-400 bg-rose-500/15 text-rose-700"
                                   : swapSourceId
@@ -1334,7 +1481,7 @@ export function ScheduleDashboard({
                               ) : null}
                             </button>
                           ) : (
-                            <div className="flex h-full min-h-[80px] w-full flex-col gap-1">
+                            <div className="flex h-full min-h-[85px] w-full flex-col gap-1">
                               {cells.map((a) => (
                                 <SlotCard
                                   key={a.id}
@@ -1344,7 +1491,7 @@ export function ScheduleDashboard({
                                   room={roomsById.get(a.roomId)}
                                   group={groupsById.get(a.classGroupId)}
                                   span={1}
-                                  minHeightClass="min-h-[80px] h-full w-full"
+                                  minHeightClass="min-h-[85px] h-full w-full"
                                   isSource={swapSourceId === a.id}
                                   isTargetCandidate={Boolean(
                                     swapSourceId && swapSourceId !== a.id
@@ -1660,7 +1807,7 @@ function SlotCard({
       type="button"
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      className={`relative flex h-full w-full flex-col justify-between rounded-md border p-2 text-left transition-all duration-150 hover:brightness-[1.03] hover:border-emerald-500/35 active:scale-95 touch-manipulation sm:p-2.5 ${minHeightClass} ${SLOT_TYPE_STYLE[roomType]} ${
+      className={`relative flex h-full w-full flex-col justify-between rounded-md border p-2.5 text-left transition-all duration-150 hover:brightness-[1.03] hover:border-emerald-500/35 active:scale-95 touch-manipulation ${minHeightClass} ${SLOT_TYPE_STYLE[roomType]} ${
         isSource
           ? "border-emerald-500 ring-2 ring-emerald-500/70 ring-offset-1 ring-offset-white"
           : ""
