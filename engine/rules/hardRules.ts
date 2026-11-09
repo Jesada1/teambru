@@ -241,10 +241,86 @@ export class SpecialRoomRequirementRule implements HardConstraintRule {
   }
 }
 
+/**
+ * H6 — Teacher must not be scheduled in any `unavailableSlots` entry.
+ * Strict hard constraint (0 tolerance).
+ */
+export class TeacherUnavailableRule implements HardConstraintRule {
+  readonly code = "H6" as const;
+  readonly name = "Teacher Unavailable Slot";
+  readonly description = "ห้ามจัดคาบในช่วงเวลาที่ครูไม่สะดวก";
+  readonly severity = "HARD" as const;
+
+  evaluate(context: ConstraintContext): RuleEvaluationResult {
+    const conflicts: ConflictReport[] = [];
+
+    for (const a of context.assignments) {
+      const teacher = context.teachersById.get(a.teacherId);
+      if (!teacher) continue;
+      const key = slotKey(a.timeSlot.day, a.timeSlot.period);
+      if (!(teacher.unavailableSlots as string[]).includes(key)) continue;
+
+      conflicts.push(
+        makeConflict(
+          "H6",
+          `Teacher "${teacher.name}" is unavailable at ${key}`,
+          [a.id],
+          { teacherId: teacher.id }
+        )
+      );
+    }
+
+    return emptyHardResult(conflicts);
+  }
+}
+
+/**
+ * H7 — Teacher must not exceed `maxHoursPerDay` on any weekday.
+ * Strict hard constraint (0 tolerance).
+ */
+export class TeacherMaxHoursPerDayRule implements HardConstraintRule {
+  readonly code = "H7" as const;
+  readonly name = "Teacher Max Hours Per Day";
+  readonly description = "ห้ามสอนเกินชั่วโมงสูงสุดต่อวัน";
+  readonly severity = "HARD" as const;
+
+  evaluate(context: ConstraintContext): RuleEvaluationResult {
+    const conflicts: ConflictReport[] = [];
+    const byTeacherDay = new Map<string, string[]>();
+
+    for (const a of context.assignments) {
+      const key = `${a.teacherId}|${a.timeSlot.day}`;
+      const list = byTeacherDay.get(key) ?? [];
+      list.push(a.id);
+      byTeacherDay.set(key, list);
+    }
+
+    for (const [key, ids] of byTeacherDay) {
+      const [teacherId, day] = key.split("|");
+      const teacher = context.teachersById.get(teacherId!);
+      if (!teacher) continue;
+      if (ids.length <= teacher.maxHoursPerDay) continue;
+
+      conflicts.push(
+        makeConflict(
+          "H7",
+          `Teacher "${teacher.name}" exceeds maxHoursPerDay (${teacher.maxHoursPerDay}) on ${day} with ${ids.length} periods`,
+          ids,
+          { teacherId: teacher.id }
+        )
+      );
+    }
+
+    return emptyHardResult(conflicts);
+  }
+}
+
 export const hardRules: HardConstraintRule[] = [
   new TeacherOverlapRule(),
   new RoomOverlapRule(),
   new ClassGroupOverlapRule(),
   new RoomCapacityRule(),
   new SpecialRoomRequirementRule(),
+  new TeacherUnavailableRule(),
+  new TeacherMaxHoursPerDayRule(),
 ];

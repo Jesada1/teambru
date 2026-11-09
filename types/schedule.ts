@@ -23,6 +23,8 @@ export type ConstraintCode =
   | "H3"
   | "H4"
   | "H5"
+  | "H6"
+  | "H7"
   | "S1"
   | "S2"
   | "S3"
@@ -128,4 +130,12 @@ export interface ScheduleResult {
   roomUtilizationPercent: number;
   /** 1 - (stdev / mean) of teacher hours, clamped to [0, 1] */
   teacherWorkloadBalance: number;
+  /** assignedSlots / totalRequiredSlots × 100 */
+  completionRate: number;
+  /** True when solver returned a feasible partial (timeout / incomplete) */
+  isPartial: boolean;
+  /** True when wall-clock budget was exhausted during search */
+  timedOut?: boolean;
+  /** Total lesson demands expanded from subjects */
+  totalRequiredSlots?: number;
 }

@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -119,7 +120,13 @@ export function FileUpload({
   const [parseError, setParseError] = useState<string | null>(null);
   const [state, setState] = useState<ParsedUploadState>(emptyState);
   const [solving, setSolving] = useState(false);
+  const [solveProgress, setSolveProgress] = useState(0);
   const [solveMessage, setSolveMessage] = useState<string | null>(null);
+  const [lastSolveInput, setLastSolveInput] = useState<ScheduleInput | null>(
+    null
+  );
+  const cancelSolveRef = useRef(false);
+  const progressTimerRef = useRef<number | null>(null);
 
   const setBusy = useCallback(
     (busy: boolean) => {
@@ -128,6 +135,22 @@ export function FileUpload({
     },
     [onBusyChange]
   );
+
+  const clearProgressTimer = useCallback(() => {
+    if (progressTimerRef.current != null) {
+      window.clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+  }, []);
+
+  const cancelSolve = useCallback(() => {
+    cancelSolveRef.current = true;
+    clearProgressTimer();
+    setBusy(false);
+    setSolveProgress(0);
+    setSolveMessage(t("dash.progress.cancel"));
+    pushToast(t("dash.progress.cancel"), "info");
+  }, [clearProgressTimer, setBusy, pushToast, t]);
 
   const publishPreview = useCallback(
     (next: ParsedUploadState) => {
@@ -218,32 +241,54 @@ export function FileUpload({
 
   const solveFromInput = useCallback(
     (input: ScheduleInput, successToastKey: TranslationKey = "toast.scheduleReady") => {
+      cancelSolveRef.current = false;
+      setLastSolveInput(input);
       setBusy(true);
+      setSolveProgress(8);
       setSolveMessage(t("upload.msg.solving"));
+      clearProgressTimer();
+      progressTimerRef.current = window.setInterval(() => {
+        setSolveProgress((p) => Math.min(90, p + 7));
+      }, 160);
       window.setTimeout(() => {
+        if (cancelSolveRef.current) {
+          clearProgressTimer();
+          return;
+        }
         try {
           const result = solveSchedule(input, seed);
+          if (cancelSolveRef.current) return;
+          setSolveProgress(100);
+          const partialNote =
+            result.isPartial || result.completionRate < 100
+              ? ` · ${t("dash.partialBadge", {
+                  rate: result.completionRate.toFixed(1),
+                })}`
+              : "";
           setSolveMessage(
             result.assignments.length === 0
               ? t("upload.msg.solvedEmpty", { ms: result.executionTimeMs })
-              : t("upload.msg.solvedOk", {
+              : `${t("upload.msg.solvedOk", {
                   count: result.assignments.length,
                   ms: result.executionTimeMs,
-                })
+                })}${partialNote}`
           );
           pushToast(t(successToastKey), "success");
           onScheduleGenerated?.(result, input);
         } catch (err) {
+          if (cancelSolveRef.current) return;
           const msg =
             err instanceof Error ? err.message : t("upload.msg.solverFail");
           setSolveMessage(msg);
           pushToast(msg, "error");
         } finally {
+          clearProgressTimer();
           setBusy(false);
+          window.setTimeout(() => setSolveProgress(0), 500);
         }
       }, 40);
     },
-    [seed, onScheduleGenerated, pushToast, setBusy, t]
+    [seed, onScheduleGenerated, pushToast, setBusy, t, clearProgressTimer]
   );
 
   const confirmAndSolve = useCallback(() => {
@@ -277,24 +322,13 @@ export function FileUpload({
 
   const handleQuickDemo = useCallback(() => {
     pushToast(t("toast.demoStart"), "info");
-    setBusy(true);
-    setSolveMessage(t("upload.msg.solving"));
-    window.setTimeout(() => {
-      try {
-        const input = generateMediumDataset();
-        const result = solveSchedule(input, seed);
-        pushToast(t("toast.demoDone"), "success");
-        onScheduleGenerated?.(result, input);
-      } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : t("upload.msg.solverFail");
-        setSolveMessage(msg);
-        pushToast(msg, "error");
-      } finally {
-        setBusy(false);
-      }
-    }, 40);
-  }, [seed, onScheduleGenerated, pushToast, setBusy, t]);
+    const input = generateMediumDataset();
+    solveFromInput(input, "toast.demoDone");
+  }, [pushToast, t, solveFromInput]);
+
+  useEffect(() => {
+    return () => clearProgressTimer();
+  }, [clearProgressTimer]);
 
   const templates: Array<{ size: DatasetSize; labelKey: TranslationKey }> = [
     { size: "small", labelKey: "upload.templateSmall" },
@@ -540,6 +574,41 @@ export function FileUpload({
           {solving ? t("upload.generating") : t("upload.confirm")}
         </button>
       </section>
+
+      {solving || solveProgress > 0 ? (
+        <div className="rounded-md border border-zinc-200/80 bg-white p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-zinc-700">
+              {t("dash.progress.solving")}
+            </p>
+            <div className="flex gap-2">
+              {solving ? (
+                <button
+                  type="button"
+                  onClick={cancelSolve}
+                  className="rounded-md border border-zinc-200/80 bg-zinc-50 px-2.5 py-1 text-xs font-semibold text-zinc-700"
+                >
+                  {t("dash.progress.cancel")}
+                </button>
+              ) : lastSolveInput ? (
+                <button
+                  type="button"
+                  onClick={() => solveFromInput(lastSolveInput)}
+                  className="rounded-md border border-zinc-200/80 bg-zinc-50 px-2.5 py-1 text-xs font-semibold text-zinc-700"
+                >
+                  {t("dash.progress.retry")}
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-100">
+            <div
+              className="h-full rounded-full bg-emerald-600 transition-all duration-150"
+              style={{ width: `${solveProgress}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {solveMessage ? (
         <p className="rounded-md border border-zinc-200/80 bg-zinc-50 px-3 py-2 text-sm leading-relaxed text-zinc-700">

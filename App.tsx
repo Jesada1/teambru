@@ -117,6 +117,11 @@ function AppShell() {
   return (
     <div className="print-root min-h-screen bg-zinc-50 text-zinc-900">
       <header className="app-shell-nav sticky top-0 z-40 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md pt-safe">
+        {busy ? (
+          <div className="h-0.5 w-full overflow-hidden bg-zinc-100">
+            <div className="h-full w-1/3 animate-pulse rounded-full bg-emerald-600" />
+          </div>
+        ) : null}
         <div className="mx-auto flex max-w-[1400px] flex-col gap-2 px-3 py-2 sm:px-5 sm:py-2.5">
           <div className="flex min-w-0 items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">

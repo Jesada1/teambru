@@ -3,7 +3,6 @@ import type {
   ConstraintCode,
   DayOfWeek,
   ScheduleAssignment,
-  TimeSlotId,
 } from "../../types/schedule";
 import type {
   ConstraintContext,
@@ -236,57 +235,22 @@ export class TeacherWorkloadBalanceRule implements SoftConstraintRule {
       );
     }
 
-    // Also flag daily maxHoursPerDay breaches as soft pressure
-    for (const [teacherId, assignments] of groupAssignmentsByTeacher(
-      context.assignments
-    )) {
-      const teacher = context.teachersById.get(teacherId);
-      if (!teacher) continue;
-      const byDay = groupByDay(assignments);
-      for (const [day, dayAssignments] of byDay) {
-        if (dayAssignments.length <= teacher.maxHoursPerDay) continue;
-        const over = dayAssignments.length - teacher.maxHoursPerDay;
-        penalty += over;
-        conflicts.push(
-          makeSoftConflict(
-            "S3",
-            `Teacher "${teacher.name}" exceeds maxHoursPerDay (${teacher.maxHoursPerDay}) on ${day}`,
-            dayAssignments.map((a) => a.id),
-            over,
-            { teacherId }
-          )
-        );
-      }
-    }
-
     return softResult(conflicts, penalty);
   }
 }
 
-function groupAssignmentsByTeacher(
-  assignments: ScheduleAssignment[]
-): Map<string, ScheduleAssignment[]> {
-  const map = new Map<string, ScheduleAssignment[]>();
-  for (const a of assignments) {
-    const list = map.get(a.teacherId) ?? [];
-    list.push(a);
-    map.set(a.teacherId, list);
-  }
-  return map;
-}
-
 /**
- * S4 — Prefer avoiding teacher unavailable / inconvenient slots.
- * Each placement into `unavailableSlots` adds a soft penalty.
+ * S4 — Prefer compact day packing for class groups (minimize scattered idle gaps).
+ * Unavailable slots / maxHoursPerDay are HARD (H6/H7) and no longer soft-penalized here.
  */
-export class PreferredTimeSlotsRule implements SoftConstraintRule {
+export class IdleGapMinimizationRule implements SoftConstraintRule {
   readonly code = "S4" as const;
-  readonly name = "Preferred Time Slots";
-  readonly description = "ช่วงเวลาที่ครูสะดวก/ไม่สะดวก";
+  readonly name = "Idle Gap Minimization";
+  readonly description = "ลดคาบว่างกระจายในวันเดียวกันของกลุ่มเรียน";
   readonly severity = "SOFT" as const;
   readonly weight: number;
 
-  constructor(weight = 3) {
+  constructor(weight = 1.5) {
     this.weight = weight;
   }
 
@@ -294,23 +258,38 @@ export class PreferredTimeSlotsRule implements SoftConstraintRule {
     const conflicts: ConflictReport[] = [];
     let penalty = 0;
 
+    const byGroup = new Map<string, ScheduleAssignment[]>();
     for (const a of context.assignments) {
-      const teacher = context.teachersById.get(a.teacherId);
-      if (!teacher) continue;
+      const list = byGroup.get(a.classGroupId) ?? [];
+      list.push(a);
+      byGroup.set(a.classGroupId, list);
+    }
 
-      const key = slotKey(a.timeSlot.day, a.timeSlot.period) as TimeSlotId;
-      if (!teacher.unavailableSlots.includes(key)) continue;
+    for (const [classGroupId, assignments] of byGroup) {
+      const byDay = groupByDay(assignments);
+      const group = context.classGroupsById.get(classGroupId);
 
-      penalty += 1;
-      conflicts.push(
-        makeSoftConflict(
-          "S4",
-          `Teacher "${teacher.name}" is scheduled in unavailable slot ${key}`,
-          [a.id],
-          1,
-          { teacherId: teacher.id }
-        )
-      );
+      for (const [day, dayAssignments] of byDay) {
+        if (dayAssignments.length < 2) continue;
+        let gaps = 0;
+        for (let i = 1; i < dayAssignments.length; i++) {
+          const delta =
+            dayAssignments[i]!.timeSlot.period -
+            dayAssignments[i - 1]!.timeSlot.period;
+          if (delta > 1) gaps += delta - 1;
+        }
+        if (gaps <= 0) continue;
+        penalty += gaps;
+        conflicts.push(
+          makeSoftConflict(
+            "S4",
+            `Group "${group?.groupName ?? classGroupId}" has ${gaps} idle gap(s) on ${day}`,
+            dayAssignments.map((a) => a.id),
+            gaps,
+            { classGroupId }
+          )
+        );
+      }
     }
 
     return softResult(conflicts, penalty);
@@ -321,5 +300,5 @@ export const softRules: SoftConstraintRule[] = [
   new MaxConsecutiveHoursRule(),
   new RoomChangeMinimizationRule(),
   new TeacherWorkloadBalanceRule(),
-  new PreferredTimeSlotsRule(),
+  new IdleGapMinimizationRule(),
 ];

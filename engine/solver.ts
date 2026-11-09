@@ -36,6 +36,8 @@ interface Occupancy {
   teachers: Set<string>;
   rooms: Set<string>;
   groups: Set<string>;
+  /** `${teacherId}|${day}` → periods already placed that day (H7) */
+  teacherDayHours: Map<string, number>;
 }
 
 /** Deterministic PRNG — same seed ⇒ same sequence */
@@ -70,7 +72,12 @@ function createOccupancy(): Occupancy {
     teachers: new Set(),
     rooms: new Set(),
     groups: new Set(),
+    teacherDayHours: new Map(),
   };
+}
+
+function teacherDayKey(teacherId: string, day: string): string {
+  return `${teacherId}|${day}`;
 }
 
 /** Expand each subject into `periodsPerWeek` lesson demands */
@@ -114,9 +121,11 @@ export function filterCandidateRooms(
 function isHardFeasible(
   occupancy: Occupancy,
   demand: LessonDemand,
-  candidate: Candidate
+  candidate: Candidate,
+  teacherUnavailable: Map<string, Set<string>>,
+  maxHoursByTeacher: Map<string, number>
 ): boolean {
-  const { slotKey, roomId } = candidate;
+  const { slotKey, roomId, timeSlot } = candidate;
 
   if (occupancy.teachers.has(occupancyKey(demand.teacherId, slotKey))) {
     return false; // H1
@@ -132,6 +141,21 @@ function isHardFeasible(
       return false; // H3 parallel
     }
   }
+
+  // H6 — unavailable slots are strictly forbidden
+  const unavailable = teacherUnavailable.get(demand.teacherId);
+  if (unavailable?.has(slotKey)) {
+    return false;
+  }
+
+  // H7 — maxHoursPerDay is strictly enforced during placement
+  const dayKey = teacherDayKey(demand.teacherId, timeSlot.day);
+  const used = occupancy.teacherDayHours.get(dayKey) ?? 0;
+  const maxHours = maxHoursByTeacher.get(demand.teacherId) ?? Number.POSITIVE_INFINITY;
+  if (used + 1 > maxHours) {
+    return false;
+  }
+
   return true;
 }
 
@@ -140,10 +164,15 @@ function place(
   demand: LessonDemand,
   candidate: Candidate
 ): void {
-  const { slotKey, roomId } = candidate;
+  const { slotKey, roomId, timeSlot } = candidate;
   occupancy.teachers.add(occupancyKey(demand.teacherId, slotKey));
   occupancy.rooms.add(occupancyKey(roomId, slotKey));
   occupancy.groups.add(occupancyKey(demand.classGroupId, slotKey));
+  const dayKey = teacherDayKey(demand.teacherId, timeSlot.day);
+  occupancy.teacherDayHours.set(
+    dayKey,
+    (occupancy.teacherDayHours.get(dayKey) ?? 0) + 1
+  );
 }
 
 function unplace(
@@ -151,10 +180,14 @@ function unplace(
   demand: LessonDemand,
   candidate: Candidate
 ): void {
-  const { slotKey, roomId } = candidate;
+  const { slotKey, roomId, timeSlot } = candidate;
   occupancy.teachers.delete(occupancyKey(demand.teacherId, slotKey));
   occupancy.rooms.delete(occupancyKey(roomId, slotKey));
   occupancy.groups.delete(occupancyKey(demand.classGroupId, slotKey));
+  const dayKey = teacherDayKey(demand.teacherId, timeSlot.day);
+  const next = (occupancy.teacherDayHours.get(dayKey) ?? 1) - 1;
+  if (next <= 0) occupancy.teacherDayHours.delete(dayKey);
+  else occupancy.teacherDayHours.set(dayKey, next);
 }
 
 function buildCandidates(
@@ -162,7 +195,9 @@ function buildCandidates(
   timeSlots: TimeSlot[],
   rooms: Room[],
   occupancy: Occupancy,
-  rand: () => number
+  rand: () => number,
+  teacherUnavailable: Map<string, Set<string>>,
+  maxHoursByTeacher: Map<string, number>
 ): Candidate[] {
   const eligibleRooms = filterCandidateRooms(
     rooms,
@@ -179,7 +214,15 @@ function buildCandidates(
         roomId: room.id,
         slotKey: key,
       };
-      if (isHardFeasible(occupancy, demand, candidate)) {
+      if (
+        isHardFeasible(
+          occupancy,
+          demand,
+          candidate,
+          teacherUnavailable,
+          maxHoursByTeacher
+        )
+      ) {
         candidates.push(candidate);
       }
     }
@@ -189,21 +232,16 @@ function buildCandidates(
 }
 
 /**
- * Cheap soft heuristic: prefer avoiding unavailable slots, room churn,
- * and very long consecutive runs for the class group.
+ * Cheap soft heuristic: prefer compact days, same-room adjacency,
+ * and capacity headroom. Unavailable / maxHours are hard-filtered already.
  */
 function softHeuristicDelta(
   demand: LessonDemand,
   candidate: Candidate,
   partial: ScheduleAssignment[],
-  teacherUnavailable: Map<string, Set<string>>,
   roomsById: Map<string, Room>
 ): number {
   let score = 0;
-  const unavailable = teacherUnavailable.get(demand.teacherId);
-  if (unavailable?.has(candidate.slotKey)) {
-    score -= 3; // S4
-  }
 
   const sameDay = partial.filter(
     (a) =>
@@ -229,10 +267,11 @@ function softHeuristicDelta(
             Math.abs(a.timeSlot.period - candidate.timeSlot.period) <= 2
         ).length + 1;
       if (consecutiveCount > 3) score -= 2; // S1 pressure
+    } else if (gap > 1) {
+      score -= gap * 0.25; // S4 idle gaps
     }
   }
 
-  // Slight preference for larger leftover capacity headroom (S3-ish balance proxy)
   const room = roomsById.get(candidate.roomId);
   if (room) {
     score += Math.min(1, (room.capacity - demand.studentCount) / 40);
@@ -246,17 +285,31 @@ function orderDemandsByMrv(
   timeSlots: TimeSlot[],
   rooms: Room[],
   occupancy: Occupancy,
-  rand: () => number
+  rand: () => number,
+  teacherUnavailable: Map<string, Set<string>>,
+  maxHoursByTeacher: Map<string, number>
 ): LessonDemand[] {
   const scored = demands.map((demand) => ({
     demand,
-    options: buildCandidates(demand, timeSlots, rooms, occupancy, () => 0.5)
-      .length,
+    options: buildCandidates(
+      demand,
+      timeSlots,
+      rooms,
+      occupancy,
+      () => 0.5,
+      teacherUnavailable,
+      maxHoursByTeacher
+    ).length,
     tie: rand(),
   }));
 
   scored.sort((a, b) => a.options - b.options || a.tie - b.tie);
   return scored.map((s) => s.demand);
+}
+
+function completionOf(assigned: number, total: number): number {
+  if (total <= 0) return 100;
+  return Math.round((assigned / total) * 1000) / 10;
 }
 
 function stdev(values: number[]): number {
@@ -345,6 +398,8 @@ export function recomputeScheduleMetrics(
     assignments,
     input.teachers.map((t) => t.id)
   );
+  const totalRequiredSlots = expandLessonDemands(input).length;
+  const completionRate = completionOf(assignments.length, totalRequiredSlots);
 
   return {
     assignments,
@@ -360,13 +415,17 @@ export function recomputeScheduleMetrics(
     executionTimeMs: elapsedMs,
     roomUtilizationPercent,
     teacherWorkloadBalance,
+    completionRate,
+    isPartial: completionRate < 100,
+    totalRequiredSlots,
   };
 }
 
 /**
  * CSP backtracking solver with seeded heuristics and soft-constraint optimization.
- * Guarantees 0 hard conflicts for any returned complete (or empty) assignment set
- * by only placing via occupancy-checked candidates (H1–H5).
+ * Guarantees 0 hard conflicts for returned assignments by only placing via
+ * occupancy-checked candidates (H1–H7). On timeout, returns the best feasible
+ * partial schedule found so far (never an empty wipe when progress exists).
  */
 export function solveSchedule(
   input: ScheduleInput,
@@ -377,7 +436,10 @@ export function solveSchedule(
   const rand = mulberry32(seed);
 
   const teacherUnavailable = new Map(
-    input.teachers.map((t) => [t.id, new Set(t.unavailableSlots)])
+    input.teachers.map((t) => [t.id, new Set(t.unavailableSlots as string[])])
+  );
+  const maxHoursByTeacher = new Map(
+    input.teachers.map((t) => [t.id, t.maxHoursPerDay])
   );
   const roomsById = new Map(input.rooms.map((r) => [r.id, r]));
 
@@ -388,13 +450,35 @@ export function solveSchedule(
     input.timeSlots,
     input.rooms,
     createOccupancy(),
-    rand
+    rand,
+    teacherUnavailable,
+    maxHoursByTeacher
   );
 
   let bestAssignments: ScheduleAssignment[] = [];
+  let bestDepth = -1;
   let bestScore = -Infinity;
   let timedOut = false;
   let assignmentSeq = 0;
+
+  const considerPartial = (partial: ScheduleAssignment[]) => {
+    const depth = partial.length;
+    const { score } =
+      depth === demands.length
+        ? softFitness(input, partial)
+        : { score: depth * 1000 - softFitness(input, partial).softPenaltyTotal };
+    if (
+      depth > bestDepth ||
+      (depth === bestDepth && score > bestScore)
+    ) {
+      bestDepth = depth;
+      bestScore = score;
+      bestAssignments = partial.map((a) => ({
+        ...a,
+        timeSlot: { ...a.timeSlot },
+      }));
+    }
+  };
 
   const search = (
     index: number,
@@ -403,49 +487,43 @@ export function solveSchedule(
   ): void => {
     if (Date.now() >= deadline) {
       timedOut = true;
+      considerPartial(partial);
       return;
     }
+
+    // Always remember deepest feasible partial
+    considerPartial(partial);
 
     if (index === demands.length) {
-      const { score } = softFitness(input, partial);
-      if (score > bestScore) {
-        bestScore = score;
-        bestAssignments = partial.slice();
-      }
       return;
     }
 
-    // Keep improving under remaining budget even after first complete solution
-    const demand = demands[index];
-    let candidates = buildCandidates(
+    const demand = demands[index]!;
+    const candidates = buildCandidates(
       demand,
       input.timeSlots,
       input.rooms,
       occupancy,
-      rand
+      rand,
+      teacherUnavailable,
+      maxHoursByTeacher
     );
 
     candidates.sort((a, b) => {
-      const sa = softHeuristicDelta(
-        demand,
-        a,
-        partial,
-        teacherUnavailable,
-        roomsById
-      );
-      const sb = softHeuristicDelta(
-        demand,
-        b,
-        partial,
-        teacherUnavailable,
-        roomsById
-      );
+      const sa = softHeuristicDelta(demand, a, partial, roomsById);
+      const sb = softHeuristicDelta(demand, b, partial, roomsById);
       return sb - sa;
     });
+
+    if (candidates.length === 0) {
+      // Dead-end: keep current partial as a candidate result
+      return;
+    }
 
     for (const candidate of candidates) {
       if (timedOut || Date.now() >= deadline) {
         timedOut = true;
+        considerPartial(partial);
         return;
       }
 
@@ -473,14 +551,11 @@ export function solveSchedule(
 
   search(0, [], createOccupancy());
 
-  // If no complete solution within budget, return empty feasible schedule
-  // (never a partial with incomplete demands that could mislead callers).
   const assignments = bestAssignments;
-
   const elapsedMs = Date.now() - startedAt;
   const context = buildConstraintContext(input, assignments);
 
-  // Safety net: occupancy + room filters already enforce H1–H5
+  // Safety net: occupancy filters already enforce H1–H7
   const hardEval = evaluateRules(hardRules, context);
   const safeAssignments =
     hardEval.hardConflictCount === 0 ? assignments : [];
@@ -498,6 +573,9 @@ export function solveSchedule(
     input.teachers.map((t) => t.id)
   );
 
+  const completionRate = completionOf(safeAssignments.length, demands.length);
+  const isPartial = completionRate < 100;
+
   const fitnessScore =
     safeAssignments.length === 0 && demands.length > 0
       ? Number.NEGATIVE_INFINITY
@@ -506,7 +584,7 @@ export function solveSchedule(
   return {
     assignments: safeAssignments,
     conflicts: softEval.conflicts,
-    hardConflictCount: 0,
+    hardConflictCount: hardEval.hardConflictCount === 0 ? 0 : hardEval.hardConflictCount,
     softPenaltyTotal: softEval.softPenaltyTotal,
     fitnessScore,
     seed,
@@ -514,5 +592,107 @@ export function solveSchedule(
     executionTimeMs: elapsedMs,
     roomUtilizationPercent,
     teacherWorkloadBalance,
+    completionRate,
+    isPartial,
+    timedOut,
+    totalRequiredSlots: demands.length,
+  };
+}
+
+/**
+ * Naive greedy baseline for competition benchmarks.
+ * Only avoids basic double-booking (teacher/room/group) and ignores
+ * unavailable slots, maxHoursPerDay, and preferred room types — so it
+ * typically accumulates H4–H7 hard conflicts that CSP prevents.
+ */
+export function solveNaiveGreedy(
+  input: ScheduleInput,
+  seed = 42
+): ScheduleResult {
+  const startedAt = Date.now();
+  const rand = mulberry32(seed);
+  const occupancy = createOccupancy();
+  const demands = shuffleInPlace(expandLessonDemands(input).slice(), rand);
+  const assignments: ScheduleAssignment[] = [];
+  let assignmentSeq = 0;
+
+  for (const demand of demands) {
+    let placed = false;
+    const slots = shuffleInPlace(input.timeSlots.slice(), rand);
+    const rooms = shuffleInPlace(input.rooms.slice(), rand);
+
+    for (const timeSlot of slots) {
+      if (placed) break;
+      const key = slotKeyOf(timeSlot);
+      for (const room of rooms) {
+        const candidate: Candidate = {
+          timeSlot,
+          roomId: room.id,
+          slotKey: key,
+        };
+        // Naive: only H1–H3 occupancy checks
+        if (occupancy.teachers.has(occupancyKey(demand.teacherId, key))) continue;
+        if (occupancy.rooms.has(occupancyKey(room.id, key))) continue;
+        if (occupancy.groups.has(occupancyKey(demand.classGroupId, key))) continue;
+        let parallelHit = false;
+        for (const parallelId of demand.parallelGroupIds) {
+          if (occupancy.groups.has(occupancyKey(parallelId, key))) {
+            parallelHit = true;
+            break;
+          }
+        }
+        if (parallelHit) continue;
+
+        assignmentSeq += 1;
+        const assignment: ScheduleAssignment = {
+          id: `N${assignmentSeq}`,
+          subjectId: demand.subjectId,
+          teacherId: demand.teacherId,
+          roomId: room.id,
+          classGroupId: demand.classGroupId,
+          timeSlot: { ...timeSlot },
+        };
+        place(occupancy, demand, candidate);
+        assignments.push(assignment);
+        placed = true;
+        break;
+      }
+    }
+  }
+
+  const elapsedMs = Date.now() - startedAt;
+  const hard = checkHardConstraints(input, assignments);
+  const context = buildConstraintContext(input, assignments);
+  const softEval = evaluateRules(softRules, context);
+  const totalRequiredSlots = expandLessonDemands(input).length;
+  const completionRate = completionOf(assignments.length, totalRequiredSlots);
+  const incompletenessPenalty = (totalRequiredSlots - assignments.length) * 10;
+
+  return {
+    assignments,
+    conflicts: [...hard.conflicts, ...softEval.conflicts],
+    hardConflictCount: hard.hardConflictCount,
+    softPenaltyTotal: softEval.softPenaltyTotal,
+    fitnessScore:
+      assignments.length === 0
+        ? Number.NEGATIVE_INFINITY
+        : -softEval.softPenaltyTotal -
+          hard.hardConflictCount * 50 -
+          incompletenessPenalty,
+    seed,
+    elapsedMs,
+    executionTimeMs: elapsedMs,
+    roomUtilizationPercent: computeRoomUtilizationPercent(
+      assignments,
+      input.rooms.length,
+      input.timeSlots.length
+    ),
+    teacherWorkloadBalance: computeTeacherWorkloadBalance(
+      assignments,
+      input.teachers.map((t) => t.id)
+    ),
+    completionRate,
+    isPartial: completionRate < 100,
+    totalRequiredSlots,
   };
 }

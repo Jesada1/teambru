@@ -209,6 +209,8 @@ export async function buildScheduleWorkbook(
         ? Number(result.fitnessScore.toFixed(2))
         : "n/a",
     ],
+    ["Completion Rate (%)", Number((result.completionRate ?? 0).toFixed(1))],
+    ["Is Partial", result.isPartial ? "YES" : "NO"],
     ["Total Assignments", result.assignments.length],
     ["Teachers", input.teachers.length],
     ["Rooms", input.rooms.length],

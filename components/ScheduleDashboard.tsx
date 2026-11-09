@@ -35,6 +35,11 @@ import {
   checkHardConstraints,
   recomputeScheduleMetrics,
 } from "../engine/solver";
+import {
+  runAlgorithmComparison,
+  type AgentPipelineLog,
+  type AlgorithmComparison,
+} from "../lib/csp-engine";
 import { downloadTeacherIcal } from "../lib/exportIcal";
 import type { ExportMeta } from "../lib/exportSchedule";
 import type {
@@ -304,6 +309,8 @@ const CONFLICT_KEYS: Partial<Record<ConstraintCode, TranslationKey>> = {
   H3: "dash.conflict.H3",
   H4: "dash.conflict.H4",
   H5: "dash.conflict.H5",
+  H6: "dash.conflict.H6",
+  H7: "dash.conflict.H7",
 };
 
 export function ScheduleDashboard({
@@ -336,9 +343,17 @@ export function ScheduleDashboard({
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
   const [agentPrompt, setAgentPrompt] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
+  const [agentProgress, setAgentProgress] = useState(0);
   const [agentStatus, setAgentStatus] = useState<
     "idle" | "applied" | "rollback" | "zero"
   >("idle");
+  const [agentPipeline, setAgentPipeline] = useState<AgentPipelineLog | null>(
+    null
+  );
+  const [lastAgentPrompt, setLastAgentPrompt] = useState("");
+  const agentAbortRef = useRef<AbortController | null>(null);
+  const [benchmark, setBenchmark] = useState<AlgorithmComparison | null>(null);
+  const [benchmarkBusy, setBenchmarkBusy] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -704,15 +719,33 @@ export function ScheduleDashboard({
     return () => window.removeEventListener("keydown", onKey);
   }, [undo, redo, past.length, future.length]);
 
+  const cancelAgent = useCallback(() => {
+    agentAbortRef.current?.abort();
+    agentAbortRef.current = null;
+    setAgentBusy(false);
+    setAgentProgress(0);
+    setAgentStatus("rollback");
+    pushToast(t("dash.agent.cancel"), "info");
+  }, [pushToast, t]);
+
   const runAgent = useCallback(
     async (promptOverride?: string) => {
       const prompt = (promptOverride ?? agentPrompt).trim();
       if (!prompt || agentBusy) return;
+      setLastAgentPrompt(prompt);
       setAgentBusy(true);
+      setAgentProgress(12);
+      setAgentPipeline(null);
+      const controller = new AbortController();
+      agentAbortRef.current = controller;
+      const tick = window.setInterval(() => {
+        setAgentProgress((p) => Math.min(92, p + 8));
+      }, 180);
       try {
         const res = await fetch("/api/schedule/agent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             prompt,
             input,
@@ -726,10 +759,14 @@ export function ScheduleDashboard({
           status?: string;
           result?: ScheduleResult;
           hardConflictCount?: number;
+          pipeline?: AgentPipelineLog;
         };
+
+        if (data.pipeline) setAgentPipeline(data.pipeline);
 
         if (!res.ok || !data.ok || !data.result) {
           setAgentStatus("rollback");
+          setAgentProgress(100);
           pushToast(data.error || t("dash.agent.fail"), "error");
           return;
         }
@@ -741,13 +778,18 @@ export function ScheduleDashboard({
         setAgentStatus(
           data.result.hardConflictCount === 0 ? "zero" : "applied"
         );
+        setAgentProgress(100);
         pushToast(data.message || t("dash.agent.applied"), "success");
         if (promptOverride) setAgentPrompt(promptOverride);
-      } catch {
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
         setAgentStatus("rollback");
         pushToast(t("dash.agent.fail"), "error");
       } finally {
+        window.clearInterval(tick);
+        agentAbortRef.current = null;
         setAgentBusy(false);
+        window.setTimeout(() => setAgentProgress(0), 400);
       }
     },
     [
@@ -760,6 +802,33 @@ export function ScheduleDashboard({
       t,
     ]
   );
+
+  const runBenchmark = useCallback(() => {
+    if (benchmarkBusy) return;
+    setBenchmarkBusy(true);
+    window.setTimeout(() => {
+      try {
+        const comparison = runAlgorithmComparison(input, workingResult.seed);
+        setBenchmark(comparison);
+      } finally {
+        setBenchmarkBusy(false);
+      }
+    }, 30);
+  }, [benchmarkBusy, input, workingResult.seed]);
+
+  const teacherWorkloadRows = useMemo(() => {
+    return input.teachers.map((teacher) => {
+      const byDay = DAYS.map((day) => {
+        const used = workingResult.assignments.filter(
+          (a) => a.teacherId === teacher.id && a.timeSlot.day === day
+        ).length;
+        return { day, used, max: teacher.maxHoursPerDay, over: used > teacher.maxHoursPerDay };
+      });
+      const totalUsed = byDay.reduce((s, d) => s + d.used, 0);
+      const gaps = byDay.reduce((s, d) => s + Math.max(0, d.max - d.used), 0);
+      return { teacher, byDay, totalUsed, gaps };
+    });
+  }, [input.teachers, workingResult.assignments]);
 
   const handleExportIcs = () => {
     if (view !== "teacher" || !activeEntityId) return;
@@ -856,6 +925,14 @@ export function ScheduleDashboard({
               ? t("dash.zeroConflicts")
               : t("dash.hardConflicts", { count: hardConflicts })}
           </span>
+          {(workingResult.isPartial ||
+            (workingResult.completionRate ?? 100) < 100) && (
+            <span className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-800">
+              {t("dash.partialBadge", {
+                rate: Number(workingResult.completionRate ?? 0).toFixed(1),
+              })}
+            </span>
+          )}
           <button
             type="button"
             onClick={onReset}
@@ -972,16 +1049,49 @@ export function ScheduleDashboard({
               placeholder={t("dash.agent.placeholder")}
               className="min-h-[44px] w-full flex-1 rounded-md border border-zinc-200/80 bg-zinc-50 px-3 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-600/15"
             />
-            <button
-              type="button"
-              disabled={agentBusy || !agentPrompt.trim()}
-              onClick={() => void runAgent()}
-              className="inline-flex min-h-[44px] items-center justify-center rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Sparkles className="mr-2 h-4 w-4 shrink-0" />
-              {agentBusy ? t("dash.agent.running") : t("dash.agent.run")}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={agentBusy || !agentPrompt.trim()}
+                onClick={() => void runAgent()}
+                className="inline-flex min-h-[44px] flex-1 items-center justify-center rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white transition-transform active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none"
+              >
+                <Sparkles className="mr-2 h-4 w-4 shrink-0" />
+                {agentBusy ? t("dash.agent.running") : t("dash.agent.run")}
+              </button>
+              {agentBusy ? (
+                <button
+                  type="button"
+                  onClick={cancelAgent}
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-md border border-zinc-200/80 bg-white px-3 text-sm font-medium text-zinc-700 transition-transform active:scale-95"
+                >
+                  {t("dash.agent.cancel")}
+                </button>
+              ) : lastAgentPrompt ? (
+                <button
+                  type="button"
+                  onClick={() => void runAgent(lastAgentPrompt)}
+                  className="inline-flex min-h-[44px] items-center justify-center rounded-md border border-zinc-200/80 bg-white px-3 text-sm font-medium text-zinc-700 transition-transform active:scale-95"
+                >
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5 shrink-0" />
+                  {t("dash.agent.retry")}
+                </button>
+              ) : null}
+            </div>
           </div>
+          {agentBusy || agentProgress > 0 ? (
+            <div className="mt-2">
+              <div className="h-1.5 overflow-hidden rounded-full bg-zinc-100">
+                <div
+                  className="h-full rounded-full bg-emerald-600 transition-all duration-200"
+                  style={{ width: `${agentProgress}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                {t("dash.progress.solving")}
+              </p>
+            </div>
+          ) : null}
           <div className="mt-2 flex flex-wrap gap-1.5">
             {(
               [
@@ -1005,6 +1115,34 @@ export function ScheduleDashboard({
               </button>
             ))}
           </div>
+          {agentPipeline ? (
+            <div className="mt-3 rounded-md border border-zinc-200/80 bg-zinc-50 p-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                {t("dash.agent.pipeline")}
+              </p>
+              <ol className="mt-2 space-y-1.5">
+                {agentPipeline.steps.map((step, idx) => (
+                  <li
+                    key={`${step.stage}-${idx}`}
+                    className="flex items-start gap-2 text-xs text-zinc-700"
+                  >
+                    <span
+                      className={
+                        step.status === "ok"
+                          ? "mt-0.5 inline-flex min-w-[52px] justify-center rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700"
+                          : step.status === "fail"
+                            ? "mt-0.5 inline-flex min-w-[52px] justify-center rounded border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-bold text-rose-700"
+                            : "mt-0.5 inline-flex min-w-[52px] justify-center rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-bold text-zinc-500"
+                      }
+                    >
+                      {step.stage}
+                    </span>
+                    <span className="leading-relaxed">{step.message}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
         </div>
       </header>
 
@@ -1086,6 +1224,135 @@ export function ScheduleDashboard({
                     : "h-1.5 flex-1 rounded-sm bg-zinc-100"
                 }
               />
+            ))}
+          </div>
+        </article>
+      </section>
+
+      {/* Benchmark + Teacher workload */}
+      <section className="no-print grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <article className="rounded-lg border border-zinc-200/80 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+              {t("dash.benchmark.title")}
+            </p>
+            <button
+              type="button"
+              disabled={benchmarkBusy}
+              onClick={runBenchmark}
+              className="inline-flex min-h-[36px] items-center rounded-md border border-zinc-200/80 bg-zinc-50 px-3 text-xs font-semibold text-zinc-700 transition-transform hover:bg-zinc-100 active:scale-95 disabled:opacity-40"
+            >
+              {benchmarkBusy
+                ? t("dash.benchmark.running")
+                : t("dash.benchmark.run")}
+            </button>
+          </div>
+          {benchmark ? (
+            <div className="mt-3 space-y-2">
+              <div className="grid grid-cols-3 gap-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                <span />
+                <span>{t("dash.benchmark.csp")}</span>
+                <span>{t("dash.benchmark.naive")}</span>
+              </div>
+              {(
+                [
+                  [
+                    "dash.benchmark.conflicts",
+                    benchmark.csp.hardConflictCount,
+                    benchmark.naive.hardConflictCount,
+                  ],
+                  [
+                    "dash.benchmark.time",
+                    benchmark.csp.executionTimeMs,
+                    benchmark.naive.executionTimeMs,
+                  ],
+                  [
+                    "dash.benchmark.fitness",
+                    Number.isFinite(benchmark.csp.fitnessScore)
+                      ? benchmark.csp.fitnessScore.toFixed(1)
+                      : "n/a",
+                    Number.isFinite(benchmark.naive.fitnessScore)
+                      ? benchmark.naive.fitnessScore.toFixed(1)
+                      : "n/a",
+                  ],
+                  [
+                    "dash.benchmark.completion",
+                    `${benchmark.csp.completionRate}%`,
+                    `${benchmark.naive.completionRate}%`,
+                  ],
+                ] as const
+              ).map(([labelKey, cspVal, naiveVal]) => (
+                <div
+                  key={labelKey}
+                  className="grid grid-cols-3 gap-2 rounded-md border border-zinc-100 bg-zinc-50/80 px-2 py-1.5 text-sm"
+                >
+                  <span className="text-xs font-medium text-zinc-500">
+                    {t(labelKey)}
+                  </span>
+                  <span className="tabular-nums font-semibold text-emerald-700">
+                    {cspVal}
+                  </span>
+                  <span className="tabular-nums font-semibold text-zinc-700">
+                    {naiveVal}
+                  </span>
+                </div>
+              ))}
+              <p className="text-xs font-semibold text-zinc-600">
+                {t("dash.benchmark.winner", {
+                  name:
+                    benchmark.winner === "CSP"
+                      ? t("dash.benchmark.csp")
+                      : benchmark.winner === "NaiveGreedy"
+                        ? t("dash.benchmark.naive")
+                        : "TIE",
+                })}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-zinc-500">
+              {t("dash.benchmark.run")}
+            </p>
+          )}
+        </article>
+
+        <article className="rounded-lg border border-zinc-200/80 bg-white p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+            {t("dash.workload.title")}
+          </p>
+          <div className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1">
+            {teacherWorkloadRows.slice(0, 12).map(({ teacher, byDay, gaps }) => (
+              <div
+                key={teacher.id}
+                className="rounded-md border border-zinc-100 bg-zinc-50/70 px-2.5 py-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-medium text-zinc-800">
+                    {teacher.name}
+                  </p>
+                  <p className="shrink-0 text-[11px] text-zinc-500">
+                    {t("dash.workload.gaps", { gaps })}
+                  </p>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {byDay.map((d) => (
+                    <span
+                      key={d.day}
+                      className={
+                        d.over
+                          ? "inline-flex items-center rounded border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700"
+                          : "inline-flex items-center rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-600"
+                      }
+                      title={d.over ? t("dash.workload.over") : undefined}
+                    >
+                      {t(`dash.dayShort.${d.day}` as TranslationKey)}{" "}
+                      {t("dash.workload.hours", {
+                        used: d.used,
+                        max: d.max,
+                      })}
+                    </span>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </article>
