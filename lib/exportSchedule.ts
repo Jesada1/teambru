@@ -353,7 +353,128 @@ export async function handleExportExcel(
   XLSX.writeFile(workbook, filename);
 }
 
-export function handleExportPdf(): void {
+export type PdfExportOptions = ExportMeta & {
+  viewLabel?: string;
+  entityLabel?: string;
+  filename?: string;
+};
+
+/**
+ * Native client-side PDF generation (jsPDF).
+ * Falls back to window.print() only if PDF libraries fail to load.
+ */
+export async function handleExportPdf(
+  result?: ScheduleResult,
+  input?: ScheduleInput,
+  options?: PdfExportOptions
+): Promise<void> {
+  assertBrowser();
+
+  if (!result || !input) {
+    if (typeof window.print === "function") window.print();
+    return;
+  }
+
+  try {
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+
+    const doc = new jsPDF({
+      orientation: "landscape",
+      unit: "mm",
+      format: "a4",
+    });
+
+    const institution =
+      options?.institutionName?.trim() || "School / College / สถานศึกษา";
+    const semester =
+      options?.semesterLabel?.trim() || "Semester / ภาคเรียน —";
+    const viewLabel = options?.viewLabel?.trim() || "Weekly Timetable";
+    const entityLabel = options?.entityLabel?.trim() || "—";
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.text("Official Timetable Document / เอกสารตารางสอนอย่างเป็นทางการ", 14, 14);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(11);
+    doc.text(institution, 14, 22);
+    doc.setFontSize(10);
+    doc.text(`Semester / ภาคเรียน: ${semester}`, 14, 28);
+    doc.text(`View: ${viewLabel} · ${entityLabel}`, 14, 34);
+    doc.text(
+      `Seed: ${result.seed} · Assignments: ${result.assignments.length} · Completion: ${Number(result.completionRate ?? 0).toFixed(0)}% · Hard conflicts: ${result.hardConflictCount}`,
+      14,
+      40
+    );
+
+    const subjectsById = new Map(input.subjects.map((s) => [s.id, s]));
+    const teachersById = new Map(input.teachers.map((t) => [t.id, t]));
+    const roomsById = new Map(input.rooms.map((r) => [r.id, r]));
+    const groupsById = new Map(input.classGroups.map((g) => [g.id, g]));
+    const periods = uniquePeriods(input.timeSlots);
+
+    const head = [
+      ["Period", ...DAYS.map((d) => d)],
+    ];
+    const body = periods.map((period) => {
+      const slot = input.timeSlots.find((s) => s.period === period);
+      const label = slot
+        ? `P${period} ${slot.startTime}-${slot.endTime}`
+        : `P${period}`;
+      const cells = DAYS.map((day) => {
+        const hits = result.assignments.filter(
+          (a) => a.timeSlot.day === day && a.timeSlot.period === period
+        );
+        if (!hits.length) return "";
+        return hits
+          .map((a) => {
+            const subject = subjectsById.get(a.subjectId);
+            const teacher = teachersById.get(a.teacherId);
+            const room = roomsById.get(a.roomId);
+            const group = groupsById.get(a.classGroupId);
+            return [
+              subject?.code ?? a.subjectId,
+              teacher?.name ?? a.teacherId,
+              room?.name ?? a.roomId,
+              group?.groupName ?? a.classGroupId,
+            ].join(" | ");
+          })
+          .join("\n");
+      });
+      return [label, ...cells];
+    });
+
+    autoTable(doc, {
+      startY: 46,
+      head,
+      body,
+      styles: {
+        fontSize: 7,
+        cellPadding: 1.5,
+        overflow: "linebreak",
+        valign: "top",
+      },
+      headStyles: {
+        fillColor: [24, 24, 27],
+        textColor: 255,
+        fontStyle: "bold",
+      },
+      alternateRowStyles: { fillColor: [250, 250, 250] },
+      margin: { left: 10, right: 10 },
+    });
+
+    const filename =
+      options?.filename?.trim() ||
+      `Timetable_Schedule_${new Date().getFullYear()}.pdf`;
+    doc.save(filename);
+  } catch {
+    if (typeof window.print === "function") window.print();
+  }
+}
+
+/** Legacy print fallback kept for callers that only need browser print dialog */
+export function handlePrintFallback(): void {
   if (typeof window === "undefined" || typeof window.print !== "function") {
     return;
   }

@@ -1,25 +1,33 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, RotateCcw } from "lucide-react";
 import { FileUpload } from "./components/FileUpload";
 import { DashboardErrorBoundary } from "./components/DashboardErrorBoundary";
+import { JudgeDemoBar } from "./components/JudgeDemoBar";
 import { ScheduleDashboard } from "./components/ScheduleDashboard";
 import {
   StepIndicator,
   type WorkflowStep,
 } from "./components/StepIndicator";
 import {
+  DemoAuthProvider,
+  useDemoAuth,
+} from "./context/DemoAuthContext";
+import {
   LanguageProvider,
   LanguageSwitcher,
   useLanguage,
 } from "./context/LanguageContext";
 import { ToastProvider, useToast } from "./context/ToastContext";
+import { solveSchedule } from "./lib/csp-engine";
 import {
   handleExportExcel,
   handleExportPdf,
   type ExportMeta,
 } from "./lib/exportSchedule";
+import { generateSmallDataset } from "./lib/mockData";
+import { withStudents } from "./lib/students";
 import type { ScheduleInput, ScheduleResult } from "./types/schedule";
 
 export type AppView = "upload" | "dashboard";
@@ -29,6 +37,7 @@ const SEED_PRESETS = [42, 7, 123, 2026] as const;
 function AppShell() {
   const { t } = useLanguage();
   const { pushToast } = useToast();
+  const { permissions } = useDemoAuth();
   const [view, setView] = useState<AppView>("upload");
   const [scheduleResult, setScheduleResult] = useState<ScheduleResult | null>(
     null
@@ -52,21 +61,37 @@ function AppShell() {
   const onScheduleGenerated = useCallback(
     (result: ScheduleResult, input: ScheduleInput) => {
       setScheduleResult(result);
-      setScheduleInput(input);
+      setScheduleInput(withStudents(input));
       setView("dashboard");
       setBusy(false);
     },
     []
   );
 
+  /** Judges switching to Teacher/Student without a prior solve get an instant demo timetable. */
+  useEffect(() => {
+    if (permissions.canUpload || scheduleResult) return;
+    const input = withStudents(generateSmallDataset());
+    const result = solveSchedule(input, seed);
+    setScheduleInput(input);
+    setScheduleResult(result);
+    setView("dashboard");
+    setHasPreviewData(true);
+    setHasPreviewErrors(false);
+  }, [permissions.canUpload, scheduleResult, seed]);
+
   const resetToUpload = useCallback(() => {
+    if (!permissions.canUpload) {
+      pushToast(t("judge.readonly"), "info");
+      return;
+    }
     setScheduleResult(null);
     setScheduleInput(null);
     setView("upload");
     setBusy(false);
     setHasPreviewData(false);
     setHasPreviewErrors(false);
-  }, []);
+  }, [permissions.canUpload, pushToast, t]);
 
   const exportExcel = useCallback(
     async (meta?: ExportMeta) => {
@@ -82,11 +107,27 @@ function AppShell() {
     [scheduleResult, scheduleInput, pushToast, t]
   );
 
-  const exportPdf = useCallback((_meta?: ExportMeta) => {
-    if (typeof window === "undefined") return;
-    handleExportPdf();
-    pushToast(t("toast.exportOk"), "success");
-  }, [pushToast, t]);
+  const exportPdf = useCallback(
+    async (
+      meta?: ExportMeta & { viewLabel?: string; entityLabel?: string }
+    ) => {
+      if (typeof window === "undefined") return;
+      if (!scheduleResult || !scheduleInput) {
+        pushToast(t("toast.exportFail"), "error");
+        return;
+      }
+      try {
+        await handleExportPdf(scheduleResult, scheduleInput, {
+          ...meta,
+          filename: `Timetable_Schedule_${new Date().getFullYear()}.pdf`,
+        });
+        pushToast(t("toast.exportOk"), "success");
+      } catch {
+        pushToast(t("toast.exportFail"), "error");
+      }
+    },
+    [scheduleResult, scheduleInput, pushToast, t]
+  );
 
   const applySeedInput = useCallback(() => {
     const parsed = Number.parseInt(customSeed, 10);
@@ -116,6 +157,7 @@ function AppShell() {
 
   return (
     <div className="print-root min-h-screen bg-zinc-50 text-zinc-900">
+      <JudgeDemoBar />
       <header className="app-shell-nav sticky top-0 z-40 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md pt-safe">
         {busy ? (
           <div className="h-0.5 w-full overflow-hidden bg-zinc-100">
@@ -205,7 +247,7 @@ function AppShell() {
               />
             </label>
 
-            {view === "dashboard" ? (
+            {view === "dashboard" && permissions.canUpload ? (
               <button
                 type="button"
                 onClick={resetToUpload}
@@ -227,15 +269,28 @@ function AppShell() {
 
       <main className={view === "dashboard" ? "print-schedule" : undefined}>
         {view === "upload" ? (
-          <FileUpload
-            seed={seed}
-            onScheduleGenerated={onScheduleGenerated}
-            onBusyChange={setBusy}
-            onPreviewStateChange={(hasData, hasErrors) => {
-              setHasPreviewData(hasData);
-              setHasPreviewErrors(hasErrors);
-            }}
-          />
+          permissions.canUpload ? (
+            <FileUpload
+              seed={seed}
+              onScheduleGenerated={onScheduleGenerated}
+              onBusyChange={setBusy}
+              onPreviewStateChange={(hasData, hasErrors) => {
+                setHasPreviewData(hasData);
+                setHasPreviewErrors(hasErrors);
+              }}
+            />
+          ) : (
+            <div className="mx-auto max-w-lg p-8">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-50 p-6">
+                <h2 className="text-lg font-bold tracking-tight text-amber-950">
+                  {t("judge.readonly")}
+                </h2>
+                <p className="mt-2 text-sm leading-relaxed text-amber-900">
+                  {t("judge.title")}
+                </p>
+              </div>
+            </div>
+          )
         ) : scheduleResult && scheduleInput ? (
           <DashboardErrorBoundary>
             <ScheduleDashboard
@@ -243,7 +298,7 @@ function AppShell() {
               input={scheduleInput}
               onExportExcel={exportExcel}
               onExportPdf={exportPdf}
-              onReset={resetToUpload}
+              onReset={permissions.canUpload ? resetToUpload : undefined}
               onResultChange={setScheduleResult}
             />
           </DashboardErrorBoundary>
@@ -256,13 +311,15 @@ function AppShell() {
               <p className="mt-2 text-sm leading-relaxed text-zinc-600">
                 {t("app.noScheduleBody")}
               </p>
-              <button
-                type="button"
-                onClick={resetToUpload}
-                className="mt-4 rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-all duration-150 hover:bg-zinc-800 active:scale-[0.98]"
-              >
-                {t("app.goUpload")}
-              </button>
+              {permissions.canUpload ? (
+                <button
+                  type="button"
+                  onClick={resetToUpload}
+                  className="mt-4 rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-all duration-150 hover:bg-zinc-800 active:scale-[0.98]"
+                >
+                  {t("app.goUpload")}
+                </button>
+              ) : null}
             </div>
           </div>
         )}
@@ -275,7 +332,9 @@ export default function App() {
   return (
     <LanguageProvider>
       <ToastProvider>
-        <AppShell />
+        <DemoAuthProvider>
+          <AppShell />
+        </DemoAuthProvider>
       </ToastProvider>
     </LanguageProvider>
   );

@@ -9,6 +9,7 @@ import type {
   TimeSlot,
   TimeSlotId,
 } from "../types/schedule";
+import { synthesizeStudentsFromGroups } from "./students";
 
 export type DatasetSize = "small" | "medium" | "large";
 
@@ -160,8 +161,9 @@ export function generateMockDataset(size: DatasetSize): ScheduleInput {
     classGroups
   );
   const timeSlots = generateDefaultTimeSlots();
+  const students = synthesizeStudentsFromGroups(classGroups);
 
-  return { teachers, subjects, rooms, classGroups, timeSlots };
+  return { teachers, subjects, rooms, classGroups, timeSlots, students };
 }
 
 export function generateSmallDataset(): ScheduleInput {

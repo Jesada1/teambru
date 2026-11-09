@@ -77,6 +77,13 @@ export interface ClassGroup {
   parallelGroupIds: string[];
 }
 
+/** Individual student enrolled in a class group */
+export interface Student {
+  id: string;
+  name: string;
+  classGroupId: string;
+}
+
 /** A single placed lesson in a generated timetable */
 export interface ScheduleAssignment {
   id: string;
@@ -114,6 +121,8 @@ export interface ScheduleInput {
   rooms: Room[];
   classGroups: ClassGroup[];
   timeSlots: TimeSlot[];
+  /** Optional individual student roster (synthesized for demos when absent) */
+  students?: Student[];
 }
 
 /** Engine output after a solve attempt */

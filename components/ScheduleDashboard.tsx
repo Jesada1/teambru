@@ -40,8 +40,10 @@ import {
   type AgentPipelineLog,
   type AlgorithmComparison,
 } from "../lib/csp-engine";
+import { useDemoAuth } from "../context/DemoAuthContext";
 import { downloadTeacherIcal } from "../lib/exportIcal";
 import type { ExportMeta } from "../lib/exportSchedule";
+import { resolveStudents } from "../lib/students";
 import type {
   ClassGroup,
   ConstraintCode,
@@ -51,20 +53,25 @@ import type {
   ScheduleAssignment,
   ScheduleInput,
   ScheduleResult,
+  Student,
   Subject,
   Teacher,
   TimeSlot,
+  TimeSlotId,
 } from "../types/schedule";
 import type { TranslationKey } from "../lib/i18n";
 
 const HISTORY_LIMIT = 40;
 
-export type ScheduleViewMode = "teacher" | "room" | "classGroup";
+export type ScheduleViewMode = "teacher" | "room" | "classGroup" | "student";
 
 export type ScheduleDashboardProps = {
   result: ScheduleResult;
   input: ScheduleInput;
-  onExportPdf?: (meta: ExportMeta) => void;
+  onExportPdf?: (meta: ExportMeta & {
+    viewLabel?: string;
+    entityLabel?: string;
+  }) => void | Promise<void>;
   onExportExcel?: (meta: ExportMeta) => void | Promise<void>;
   onReset?: () => void;
   onResultChange?: (result: ScheduleResult) => void;
@@ -324,6 +331,7 @@ export function ScheduleDashboard({
 }: ScheduleDashboardProps) {
   const { t } = useLanguage();
   const { pushToast } = useToast();
+  const { permissions, role, account } = useDemoAuth();
   const [workingResult, setWorkingResult] = useState(result);
   const [past, setPast] = useState<ScheduleResult[]>([]);
   const [future, setFuture] = useState<ScheduleResult[]>([]);
@@ -332,8 +340,13 @@ export function ScheduleDashboard({
   workingRef.current = workingResult;
   const [institutionName, setInstitutionName] = useState("");
   const [semesterLabel, setSemesterLabel] = useState("");
-  const [view, setView] = useState<ScheduleViewMode>("teacher");
+  const [view, setView] = useState<ScheduleViewMode>(
+    permissions.forcedView === "student" ? "student" : "teacher"
+  );
   const [selectedEntityId, setSelectedEntityId] = useState("");
+  const [teacherUnavailableDraft, setTeacherUnavailableDraft] = useState<
+    Record<string, TimeSlotId[]>
+  >({});
   const [query, setQuery] = useState("");
   const [detail, setDetail] = useState<DetailSelection | null>(null);
   const [swapSourceId, setSwapSourceId] = useState<string | null>(null);
@@ -405,6 +418,19 @@ export function ScheduleDashboard({
     [input.classGroups]
   );
 
+  const students = useMemo(() => resolveStudents(input), [input]);
+  const studentsById = useMemo(
+    () => new Map(students.map((s) => [s.id, s])),
+    [students]
+  );
+
+  useEffect(() => {
+    if (permissions.forcedView === "student" && view !== "student") {
+      setView("student");
+      setSelectedEntityId("");
+    }
+  }, [permissions.forcedView, view]);
+
   const entityOptions = useMemo<EntityOption[]>(() => {
     const q = query.trim().toLowerCase();
     const match = (label: string) => !q || label.toLowerCase().includes(q);
@@ -419,26 +445,55 @@ export function ScheduleDashboard({
         .filter((room) => match(room.name) || match(room.id))
         .map((room) => ({ id: room.id, label: room.name }));
     }
+    if (view === "student") {
+      return students
+        .filter(
+          (s) =>
+            match(s.name) ||
+            match(s.id) ||
+            match(groupsById.get(s.classGroupId)?.groupName ?? "")
+        )
+        .map((s) => ({
+          id: s.id,
+          label: `${s.name} (${s.id})`,
+        }));
+    }
     return input.classGroups
       .filter(
         (g) => match(g.groupName) || match(g.id) || match(g.department)
       )
       .map((g) => ({ id: g.id, label: g.groupName }));
-  }, [view, input, query]);
+  }, [view, input, query, students, groupsById]);
 
   const activeEntityId =
     selectedEntityId && entityOptions.some((e) => e.id === selectedEntityId)
       ? selectedEntityId
       : entityOptions[0]?.id ?? "";
 
+  const activeStudent: Student | undefined =
+    view === "student" ? studentsById.get(activeEntityId) : undefined;
+
+  const enrolledSubjectIds = useMemo(() => {
+    if (!activeStudent) return new Set<string>();
+    return new Set(
+      input.subjects
+        .filter((s) => s.classGroupId === activeStudent.classGroupId)
+        .map((s) => s.id)
+    );
+  }, [activeStudent, input.subjects]);
+
   const filteredAssignments = useMemo(() => {
     if (!activeEntityId) return [];
     return workingResult.assignments.filter((a) => {
       if (view === "teacher") return a.teacherId === activeEntityId;
       if (view === "room") return a.roomId === activeEntityId;
+      if (view === "student") {
+        const student = studentsById.get(activeEntityId);
+        return student ? a.classGroupId === student.classGroupId : false;
+      }
       return a.classGroupId === activeEntityId;
     });
-  }, [workingResult.assignments, view, activeEntityId]);
+  }, [workingResult.assignments, view, activeEntityId, studentsById]);
 
   const cellMap = useMemo(() => {
     const map = new Map<string, ScheduleAssignment[]>();
@@ -474,11 +529,19 @@ export function ScheduleDashboard({
         ? "grid-cols-[90px_repeat(5,1fr)]"
         : `grid-cols-[90px_repeat(${visibleDays.length},1fr)]`;
 
-  const tabs: Array<{ id: ScheduleViewMode; labelKey: TranslationKey }> = [
-    { id: "teacher", labelKey: "dash.tab.teacher" },
-    { id: "room", labelKey: "dash.tab.room" },
-    { id: "classGroup", labelKey: "dash.tab.classGroup" },
-  ];
+  const tabs = (
+    [
+      { id: "teacher", labelKey: "dash.tab.teacher" },
+      { id: "classGroup", labelKey: "dash.tab.classGroup" },
+      { id: "student", labelKey: "dash.tab.student" },
+      { id: "room", labelKey: "dash.tab.room" },
+    ] as Array<{ id: ScheduleViewMode; labelKey: TranslationKey }>
+  ).filter((tab) => {
+    if (permissions.forcedView === "student") {
+      return tab.id === "student";
+    }
+    return true;
+  });
 
   const tone = speedTone(workingResult.executionTimeMs);
   const speedLabel =
@@ -663,6 +726,10 @@ export function ScheduleDashboard({
   };
 
   const onSlotCardClick = (assignment: ScheduleAssignment) => {
+    if (!permissions.canEditSchedule) {
+      setDetail({ assignment });
+      return;
+    }
     if (!swapSourceId) {
       setSwapSourceId(assignment.id);
       setInvalidTargetKey(null);
@@ -678,7 +745,7 @@ export function ScheduleDashboard({
   };
 
   const onEmptyCellClick = (day: DayOfWeek, period: number) => {
-    if (!swapSourceId) return;
+    if (!permissions.canEditSchedule || !swapSourceId) return;
     attemptMove(swapSourceId, day, period);
   };
 
@@ -864,18 +931,48 @@ export function ScheduleDashboard({
     : undefined;
 
   const handleExportExcel = () => {
+    if (!permissions.canExport) return;
     onExportExcel?.(exportMeta);
   };
 
   const handleExportPdf = () => {
+    if (!permissions.canExport) return;
+    const viewLabel =
+      view === "teacher"
+        ? t("dash.tab.teacher")
+        : view === "classGroup"
+          ? t("dash.tab.classGroup")
+          : view === "student"
+            ? t("dash.tab.student")
+            : t("dash.tab.room");
     if (onExportPdf) {
-      onExportPdf(exportMeta);
+      void onExportPdf({
+        ...exportMeta,
+        viewLabel,
+        entityLabel: activeEntityLabel,
+      });
       return;
     }
-    if (typeof window !== "undefined" && typeof window.print === "function") {
-      window.print();
-      pushToast(t("toast.exportOk"), "success");
+  };
+
+  const markTeacherUnavailable = () => {
+    if (!permissions.canUpdateAvailability || view !== "teacher" || !activeEntityId) {
+      return;
     }
+    const teacher = teachersById.get(activeEntityId);
+    if (!teacher) return;
+    const current =
+      teacherUnavailableDraft[activeEntityId] ??
+      ([...teacher.unavailableSlots] as TimeSlotId[]);
+    const candidate = "MON_P1" as TimeSlotId;
+    const next = current.includes(candidate)
+      ? current.filter((s) => s !== candidate)
+      : [...current, candidate];
+    setTeacherUnavailableDraft((prev) => ({
+      ...prev,
+      [activeEntityId]: next,
+    }));
+    pushToast(t("judge.availabilityOk"), "success");
   };
 
   const printGeneratedAt = useMemo(() => {
@@ -894,7 +991,9 @@ export function ScheduleDashboard({
       ? t("dash.tab.teacher")
       : view === "room"
         ? t("dash.tab.room")
-        : t("dash.tab.classGroup");
+        : view === "student"
+          ? t("dash.tab.student")
+          : t("dash.tab.classGroup");
 
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-3 p-3 pb-28 sm:p-5 md:pb-5">
@@ -1046,6 +1145,7 @@ export function ScheduleDashboard({
         ) : null}
 
         {/* Natural-language AI Agent bar */}
+        {permissions.canRunAgent ? (
         <div className="no-print rounded-lg border border-zinc-200/80 bg-white p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -1188,6 +1288,7 @@ export function ScheduleDashboard({
             </div>
           ) : null}
         </div>
+        ) : null}
       </header>
 
       {/* KPI bento */}
@@ -1273,8 +1374,35 @@ export function ScheduleDashboard({
         </article>
       </section>
 
+      {!permissions.canRunBenchmark && !permissions.canEditSchedule ? (
+        <p className="no-print rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-900">
+          {t("judge.readonly")} · {account.username} ({role})
+        </p>
+      ) : null}
+
+      {view === "student" && activeStudent ? (
+        <div className="no-print rounded-md border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-900">
+          <p className="font-semibold">{activeStudent.name} · {activeStudent.id}</p>
+          <p className="mt-0.5 text-xs">
+            {t("dash.student.group", {
+              name:
+                groupsById.get(activeStudent.classGroupId)?.groupName ??
+                activeStudent.classGroupId,
+            })}
+          </p>
+          <p className="mt-0.5 text-xs">{t("dash.student.highlight")}</p>
+        </div>
+      ) : null}
+
       {/* Benchmark + Teacher workload */}
-      <section className="no-print grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <section
+        className={
+          permissions.canRunBenchmark
+            ? "no-print grid grid-cols-1 gap-3 lg:grid-cols-2"
+            : "no-print grid grid-cols-1 gap-3"
+        }
+      >
+        {permissions.canRunBenchmark ? (
         <article className="rounded-lg border border-zinc-200/80 bg-white p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
@@ -1358,6 +1486,7 @@ export function ScheduleDashboard({
             </p>
           )}
         </article>
+        ) : null}
 
         <article className="rounded-lg border border-zinc-200/80 bg-white p-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
@@ -1434,31 +1563,46 @@ export function ScheduleDashboard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 overflow-x-auto scrollbar-thin">
-            <button
-              type="button"
-              onClick={undo}
-              disabled={!canUndo}
-              title="Ctrl+Z"
-              className="inline-flex min-h-[44px] items-center rounded-md border border-zinc-200/80 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-transform duration-150 hover:bg-zinc-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Undo2 className="mr-2 h-4 w-4 shrink-0" />
-              {t("dash.undo")}
-            </button>
-            <button
-              type="button"
-              onClick={redo}
-              disabled={!canRedo}
-              title="Ctrl+Y"
-              className="inline-flex min-h-[44px] items-center rounded-md border border-zinc-200/80 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-transform duration-150 hover:bg-zinc-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Redo2 className="mr-2 h-4 w-4 shrink-0" />
-              {t("dash.redo")}
-            </button>
+            {permissions.canEditSchedule ? (
+              <>
+                <button
+                  type="button"
+                  onClick={undo}
+                  disabled={!canUndo}
+                  title="Ctrl+Z"
+                  className="inline-flex min-h-[44px] items-center rounded-md border border-zinc-200/80 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-transform duration-150 hover:bg-zinc-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Undo2 className="mr-2 h-4 w-4 shrink-0" />
+                  {t("dash.undo")}
+                </button>
+                <button
+                  type="button"
+                  onClick={redo}
+                  disabled={!canRedo}
+                  title="Ctrl+Y"
+                  className="inline-flex min-h-[44px] items-center rounded-md border border-zinc-200/80 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-transform duration-150 hover:bg-zinc-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Redo2 className="mr-2 h-4 w-4 shrink-0" />
+                  {t("dash.redo")}
+                </button>
+              </>
+            ) : null}
+            {view === "teacher" && permissions.canUpdateAvailability ? (
+              <button
+                type="button"
+                onClick={markTeacherUnavailable}
+                disabled={!activeEntityId}
+                className="inline-flex min-h-[44px] items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-sm font-medium text-amber-900 transition-transform duration-150 hover:bg-amber-500/15 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <CalendarX className="mr-2 h-4 w-4 shrink-0" />
+                {t("judge.availability")}
+              </button>
+            ) : null}
             {view === "teacher" ? (
               <button
                 type="button"
                 onClick={handleExportIcs}
-                disabled={!activeEntityId}
+                disabled={!activeEntityId || !permissions.canExport}
                 className="hidden min-h-[44px] items-center rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white transition-transform duration-150 hover:bg-emerald-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
               >
                 <CalendarPlus className="mr-2 h-4 w-4 shrink-0" />
@@ -1468,7 +1612,7 @@ export function ScheduleDashboard({
             <button
               type="button"
               onClick={handleExportExcel}
-              disabled={!onExportExcel}
+              disabled={!onExportExcel || !permissions.canExport}
               className="hidden min-h-[44px] items-center rounded-md border border-zinc-200/80 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-transform duration-150 hover:bg-zinc-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
             >
               <FileSpreadsheet className="mr-2 h-4 w-4 shrink-0" />
@@ -1477,7 +1621,8 @@ export function ScheduleDashboard({
             <button
               type="button"
               onClick={handleExportPdf}
-              className="hidden min-h-[44px] items-center rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-transform duration-150 hover:bg-zinc-800 active:scale-95 md:inline-flex"
+              disabled={!permissions.canExport}
+              className="hidden min-h-[44px] items-center rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-transform duration-150 hover:bg-zinc-800 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 md:inline-flex"
             >
               <Printer className="mr-2 h-4 w-4 shrink-0" />
               {t("dash.exportPdf")}
@@ -1526,8 +1671,10 @@ export function ScheduleDashboard({
                   ? t("dash.searchTeacher")
                   : view === "room"
                     ? t("dash.searchRoom")
-                    : t("dash.searchGroup")
-              }
+                    : view === "student"
+                      ? t("dash.searchStudent")
+                      : t("dash.searchGroup")
+                }
               className="w-full rounded-md border border-zinc-200/80 bg-white py-2 pl-9 pr-3 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-600/15"
             />
           </label>
@@ -1756,6 +1903,12 @@ export function ScheduleDashboard({
                               )}
                               isInvalid={isInvalidTarget}
                               invalidReason={invalidReason}
+                              highlighted={
+                                view === "student" &&
+                                enrolledSubjectIds.has(
+                                  merged.assignment.subjectId
+                                )
+                              }
                               onClick={() =>
                                 onSlotCardClick(merged.assignment)
                               }
@@ -1768,17 +1921,19 @@ export function ScheduleDashboard({
                           ) : cells.length === 0 ? (
                             <button
                               type="button"
-                              disabled={!swapSourceId}
+                              disabled={
+                                !permissions.canEditSchedule || !swapSourceId
+                              }
                               onClick={() => onEmptyCellClick(day, period)}
                               className={`flex h-full min-h-[85px] w-full items-center justify-center rounded-md border border-dashed transition-transform duration-150 ${
                                 isInvalidTarget
                                   ? "border-rose-400 bg-rose-500/15 text-rose-700"
-                                  : swapSourceId
+                                  : permissions.canEditSchedule && swapSourceId
                                     ? "border-emerald-400/50 bg-emerald-500/5 text-emerald-700 hover:border-emerald-500 hover:bg-emerald-500/10 active:scale-95"
                                     : "cursor-default border-zinc-200/80 bg-zinc-50/40 text-transparent hover:border-zinc-300"
                               }`}
                               aria-label={
-                                swapSourceId
+                                permissions.canEditSchedule && swapSourceId
                                   ? t("dash.swap.moveHere")
                                   : undefined
                               }
@@ -1787,7 +1942,8 @@ export function ScheduleDashboard({
                                 <span className="px-1 text-center text-[10px] font-semibold leading-snug">
                                   {invalidReason}
                                 </span>
-                              ) : swapSourceId ? (
+                              ) : permissions.canEditSchedule &&
+                                swapSourceId ? (
                                 <ArrowLeftRight className="h-4 w-4 shrink-0 opacity-70" />
                               ) : null}
                             </button>
@@ -1809,6 +1965,10 @@ export function ScheduleDashboard({
                                   )}
                                   isInvalid={isInvalidTarget}
                                   invalidReason={invalidReason}
+                                  highlighted={
+                                    view === "student" &&
+                                    enrolledSubjectIds.has(a.subjectId)
+                                  }
                                   onClick={() => onSlotCardClick(a)}
                                   onDoubleClick={() =>
                                     setDetail({ assignment: a })
@@ -1844,6 +2004,7 @@ export function ScheduleDashboard({
       {/* Mobile sticky action bar */}
       <div className="no-print fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200/80 bg-white/95 backdrop-blur-md md:hidden pb-safe">
         <div className="mx-auto flex max-w-[1400px] gap-2 overflow-x-auto scrollbar-thin px-3 py-2">
+          {permissions.canEditSchedule ? (
           <button
             type="button"
             onClick={() => {
@@ -1860,6 +2021,7 @@ export function ScheduleDashboard({
             <ArrowLeftRight className="mr-2 h-4 w-4 shrink-0" />
             {swapSourceId ? t("dash.swap.cancel") : t("dash.swap.arm")}
           </button>
+          ) : null}
           <button
             type="button"
             onClick={() => setExportSheetOpen(true)}
@@ -2086,6 +2248,7 @@ function SlotCard({
   isTargetCandidate,
   isInvalid,
   invalidReason,
+  highlighted,
   onClick,
   onDoubleClick,
 }: {
@@ -2100,6 +2263,7 @@ function SlotCard({
   isTargetCandidate: boolean;
   isInvalid: boolean;
   invalidReason: string | null;
+  highlighted?: boolean;
   onClick: () => void;
   onDoubleClick: () => void;
 }) {
@@ -2124,6 +2288,10 @@ function SlotCard({
           : ""
       } ${isTargetCandidate ? "ring-1 ring-zinc-400/50" : ""} ${
         isInvalid ? "ring-2 ring-rose-400 ring-offset-1 ring-offset-white" : ""
+      } ${
+        highlighted
+          ? "ring-2 ring-sky-400/80 ring-offset-1 ring-offset-white border-sky-400"
+          : ""
       }`}
       title={[
         subject?.name ?? assignment.subjectId,
