@@ -141,27 +141,37 @@ export class ClassGroupOverlapRule implements HardConstraintRule {
       );
     }
 
-    // Parallel groups must not share a time slot
+    // Parallel groups must not share a time slot (bidirectional adjacency)
     const reported = new Set<string>();
-    for (const a of context.assignments) {
-      const group = context.classGroupsById.get(a.classGroupId);
-      if (!group?.parallelGroupIds.length) continue;
+    const peersOf = new Map<string, Set<string>>();
+    for (const group of context.classGroupsById.values()) {
+      for (const peerId of group.parallelGroupIds) {
+        if (!peersOf.has(group.id)) peersOf.set(group.id, new Set());
+        if (!peersOf.has(peerId)) peersOf.set(peerId, new Set());
+        peersOf.get(group.id)!.add(peerId);
+        peersOf.get(peerId)!.add(group.id);
+      }
+    }
 
+    for (const a of context.assignments) {
+      const peers = peersOf.get(a.classGroupId);
+      if (!peers?.size) continue;
+      const group = context.classGroupsById.get(a.classGroupId);
       const aKey = slotKey(a.timeSlot.day, a.timeSlot.period);
-      for (const parallelId of group.parallelGroupIds) {
-        const peers = context.assignments.filter(
+      for (const parallelId of peers) {
+        const peerAssignments = context.assignments.filter(
           (b) =>
             b.classGroupId === parallelId &&
             slotKey(b.timeSlot.day, b.timeSlot.period) === aKey
         );
-        for (const peer of peers) {
+        for (const peer of peerAssignments) {
           const pairKey = [a.id, peer.id].sort().join("|");
           if (reported.has(pairKey)) continue;
           reported.add(pairKey);
           conflicts.push(
             makeConflict(
               "H3",
-              `Parallel groups "${group.groupName}" and "${
+              `Parallel groups "${group?.groupName ?? a.classGroupId}" and "${
                 context.classGroupsById.get(parallelId)?.groupName ?? parallelId
               }" overlap`,
               [a.id, peer.id],

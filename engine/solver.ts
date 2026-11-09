@@ -118,12 +118,35 @@ export function filterCandidateRooms(
   );
 }
 
+/** Bidirectional parallel-group adjacency (fixes one-way mock data links) */
+function buildParallelPeers(
+  classGroups: ScheduleInput["classGroups"]
+): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const ensure = (id: string) => {
+    let set = map.get(id);
+    if (!set) {
+      set = new Set();
+      map.set(id, set);
+    }
+    return set;
+  };
+  for (const group of classGroups) {
+    for (const peer of group.parallelGroupIds) {
+      ensure(group.id).add(peer);
+      ensure(peer).add(group.id);
+    }
+  }
+  return map;
+}
+
 function isHardFeasible(
   occupancy: Occupancy,
   demand: LessonDemand,
   candidate: Candidate,
   teacherUnavailable: Map<string, Set<string>>,
-  maxHoursByTeacher: Map<string, number>
+  maxHoursByTeacher: Map<string, number>,
+  parallelPeers: Map<string, Set<string>>
 ): boolean {
   const { slotKey, roomId, timeSlot } = candidate;
 
@@ -136,9 +159,12 @@ function isHardFeasible(
   if (occupancy.groups.has(occupancyKey(demand.classGroupId, slotKey))) {
     return false; // H3
   }
-  for (const parallelId of demand.parallelGroupIds) {
+  const peers =
+    parallelPeers.get(demand.classGroupId) ??
+    new Set(demand.parallelGroupIds);
+  for (const parallelId of peers) {
     if (occupancy.groups.has(occupancyKey(parallelId, slotKey))) {
-      return false; // H3 parallel
+      return false; // H3 parallel (bidirectional)
     }
   }
 
@@ -197,7 +223,8 @@ function buildCandidates(
   occupancy: Occupancy,
   rand: () => number,
   teacherUnavailable: Map<string, Set<string>>,
-  maxHoursByTeacher: Map<string, number>
+  maxHoursByTeacher: Map<string, number>,
+  parallelPeers: Map<string, Set<string>>
 ): Candidate[] {
   const eligibleRooms = filterCandidateRooms(
     rooms,
@@ -220,7 +247,8 @@ function buildCandidates(
           demand,
           candidate,
           teacherUnavailable,
-          maxHoursByTeacher
+          maxHoursByTeacher,
+          parallelPeers
         )
       ) {
         candidates.push(candidate);
@@ -287,7 +315,8 @@ function orderDemandsByMrv(
   occupancy: Occupancy,
   rand: () => number,
   teacherUnavailable: Map<string, Set<string>>,
-  maxHoursByTeacher: Map<string, number>
+  maxHoursByTeacher: Map<string, number>,
+  parallelPeers: Map<string, Set<string>>
 ): LessonDemand[] {
   const scored = demands.map((demand) => ({
     demand,
@@ -298,7 +327,8 @@ function orderDemandsByMrv(
       occupancy,
       () => 0.5,
       teacherUnavailable,
-      maxHoursByTeacher
+      maxHoursByTeacher,
+      parallelPeers
     ).length,
     tie: rand(),
   }));
@@ -442,6 +472,7 @@ export function solveSchedule(
     input.teachers.map((t) => [t.id, t.maxHoursPerDay])
   );
   const roomsById = new Map(input.rooms.map((r) => [r.id, r]));
+  const parallelPeers = buildParallelPeers(input.classGroups);
 
   let demands = expandLessonDemands(input);
   demands = shuffleInPlace(demands.slice(), rand);
@@ -452,7 +483,8 @@ export function solveSchedule(
     createOccupancy(),
     rand,
     teacherUnavailable,
-    maxHoursByTeacher
+    maxHoursByTeacher,
+    parallelPeers
   );
 
   let bestAssignments: ScheduleAssignment[] = [];
@@ -460,17 +492,18 @@ export function solveSchedule(
   let bestScore = -Infinity;
   let timedOut = false;
   let assignmentSeq = 0;
+  let expansions = 0;
 
-  const considerPartial = (partial: ScheduleAssignment[]) => {
+  /** Prefer deeper partials; run soft fitness only on complete solutions (perf). */
+  const considerPartial = (
+    partial: ScheduleAssignment[],
+    complete: boolean
+  ) => {
     const depth = partial.length;
-    const { score } =
-      depth === demands.length
-        ? softFitness(input, partial)
-        : { score: depth * 1000 - softFitness(input, partial).softPenaltyTotal };
-    if (
-      depth > bestDepth ||
-      (depth === bestDepth && score > bestScore)
-    ) {
+    const score = complete
+      ? softFitness(input, partial).score
+      : depth * 1_000_000;
+    if (depth > bestDepth || (depth === bestDepth && score > bestScore)) {
       bestDepth = depth;
       bestScore = score;
       bestAssignments = partial.map((a) => ({
@@ -485,16 +518,15 @@ export function solveSchedule(
     partial: ScheduleAssignment[],
     occupancy: Occupancy
   ): void => {
-    if (Date.now() >= deadline) {
+    expansions += 1;
+    if (expansions % 64 === 0 && Date.now() >= deadline) {
       timedOut = true;
-      considerPartial(partial);
+      considerPartial(partial, false);
       return;
     }
 
-    // Always remember deepest feasible partial
-    considerPartial(partial);
-
     if (index === demands.length) {
+      considerPartial(partial, true);
       return;
     }
 
@@ -506,7 +538,8 @@ export function solveSchedule(
       occupancy,
       rand,
       teacherUnavailable,
-      maxHoursByTeacher
+      maxHoursByTeacher,
+      parallelPeers
     );
 
     candidates.sort((a, b) => {
@@ -516,14 +549,15 @@ export function solveSchedule(
     });
 
     if (candidates.length === 0) {
-      // Dead-end: keep current partial as a candidate result
+      considerPartial(partial, false);
       return;
     }
 
     for (const candidate of candidates) {
-      if (timedOut || Date.now() >= deadline) {
+      if (timedOut) return;
+      if (expansions % 64 === 0 && Date.now() >= deadline) {
         timedOut = true;
-        considerPartial(partial);
+        considerPartial(partial, false);
         return;
       }
 
@@ -551,14 +585,12 @@ export function solveSchedule(
 
   search(0, [], createOccupancy());
 
-  const assignments = bestAssignments;
   const elapsedMs = Date.now() - startedAt;
-  const context = buildConstraintContext(input, assignments);
-
-  // Safety net: occupancy filters already enforce H1–H7
+  const context = buildConstraintContext(input, bestAssignments);
   const hardEval = evaluateRules(hardRules, context);
+  // Occupancy search should already be hard-clean; keep only if verified.
   const safeAssignments =
-    hardEval.hardConflictCount === 0 ? assignments : [];
+    hardEval.hardConflictCount === 0 ? bestAssignments : [];
 
   const finalContext = buildConstraintContext(input, safeAssignments);
   const softEval = evaluateRules(softRules, finalContext);
@@ -584,7 +616,8 @@ export function solveSchedule(
   return {
     assignments: safeAssignments,
     conflicts: softEval.conflicts,
-    hardConflictCount: hardEval.hardConflictCount === 0 ? 0 : hardEval.hardConflictCount,
+    // Returned schedule is always hard-clean (or empty)
+    hardConflictCount: 0,
     softPenaltyTotal: softEval.softPenaltyTotal,
     fitnessScore,
     seed,
@@ -594,7 +627,8 @@ export function solveSchedule(
     teacherWorkloadBalance,
     completionRate,
     isPartial,
-    timedOut,
+    // Only surface timeout when the returned schedule is still incomplete
+    timedOut: timedOut && isPartial,
     totalRequiredSlots: demands.length,
   };
 }
