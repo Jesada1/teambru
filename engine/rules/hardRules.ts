@@ -325,6 +325,45 @@ export class TeacherMaxHoursPerDayRule implements HardConstraintRule {
   }
 }
 
+/**
+ * H8 — Teacher must not exceed `maxHoursPerWeek` across the whole timetable.
+ * Strict hard constraint (0 tolerance).
+ */
+export class TeacherMaxHoursPerWeekRule implements HardConstraintRule {
+  readonly code = "H8" as const;
+  readonly name = "Teacher Max Hours Per Week";
+  readonly description = "ห้ามสอนเกินชั่วโมงสูงสุดต่อสัปดาห์";
+  readonly severity = "HARD" as const;
+
+  evaluate(context: ConstraintContext): RuleEvaluationResult {
+    const conflicts: ConflictReport[] = [];
+    const byTeacher = new Map<string, string[]>();
+
+    for (const a of context.assignments) {
+      const list = byTeacher.get(a.teacherId) ?? [];
+      list.push(a.id);
+      byTeacher.set(a.teacherId, list);
+    }
+
+    for (const [teacherId, ids] of byTeacher) {
+      const teacher = context.teachersById.get(teacherId);
+      if (!teacher) continue;
+      if (ids.length <= teacher.maxHoursPerWeek) continue;
+
+      conflicts.push(
+        makeConflict(
+          "H8",
+          `Teacher "${teacher.name}" exceeds maxHoursPerWeek (${teacher.maxHoursPerWeek}) with ${ids.length} periods`,
+          ids,
+          { teacherId: teacher.id }
+        )
+      );
+    }
+
+    return emptyHardResult(conflicts);
+  }
+}
+
 export const hardRules: HardConstraintRule[] = [
   new TeacherOverlapRule(),
   new RoomOverlapRule(),
@@ -333,4 +372,5 @@ export const hardRules: HardConstraintRule[] = [
   new SpecialRoomRequirementRule(),
   new TeacherUnavailableRule(),
   new TeacherMaxHoursPerDayRule(),
+  new TeacherMaxHoursPerWeekRule(),
 ];

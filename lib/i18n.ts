@@ -5,7 +5,7 @@ export type TranslationKey = keyof typeof th;
 const th = {
   // —— App / Nav ——
   "app.title": "ระบบจัดตารางสอนอัตโนมัติด้วย AI",
-  "app.subtitle": "ตัวแก้ปัญหา CSP · ข้อจำกัดแข็ง H1–H7",
+  "app.subtitle": "ตัวแก้ปัญหา CSP · ข้อจำกัดแข็ง H1–H8",
   "app.seed": "ชุดค่าสุ่ม Seed",
   "app.seedCustom": "กำหนดเอง",
   "app.seedAria": "เลือกชุดค่าสุ่ม",
@@ -227,13 +227,24 @@ const th = {
   "dash.conflict.H5": "ประเภทห้องไม่ตรงกับความต้องการของวิชา",
   "dash.conflict.H6": "ครูไม่สะดวกในช่วงเวลานี้ (unavailable)",
   "dash.conflict.H7": "ครูสอนเกินชั่วโมงสูงสุดต่อวัน",
+  "dash.conflict.H8": "ครูสอนเกินชั่วโมงสูงสุดต่อสัปดาห์",
   "dash.conflict.generic": "ละเมิดข้อจำกัดแข็งของตาราง",
+  "dash.print.docTitle": "เอกสารตารางสอนอย่างเป็นทางการ",
+  "dash.print.institutionFallback": "โรงเรียน / วิทยาลัย (ระบุชื่อสถานศึกษา)",
+  "dash.print.semesterLine": "ภาคเรียน / ปีการศึกษา: {semester}",
+  "dash.print.semesterFallback": "—",
+  "dash.print.weeklyTitle": "ตารางสอนรายสัปดาห์",
+  "dash.print.viewLine": "มุมมอง: {view} · {name}",
+  "dash.print.seedLine": "Seed: {seed}",
+  "dash.print.generatedLine": "พิมพ์เมื่อ: {at}",
+  "dash.print.statsLine":
+    "จำนวนคาบ {count} · ความครบ {rate}% · Hard conflicts {hard}",
   "dash.details": "รายละเอียด",
 } as const;
 
 const en: Record<TranslationKey, string> = {
   "app.title": "AI Automated Timetable System",
-  "app.subtitle": "CSP solver · Hard constraints H1–H7",
+  "app.subtitle": "CSP solver · Hard constraints H1–H8",
   "app.seed": "Seed",
   "app.seedCustom": "Custom",
   "app.seedAria": "Seed preset",
@@ -453,7 +464,18 @@ const en: Record<TranslationKey, string> = {
   "dash.conflict.H5": "Room type does not match subject requirement",
   "dash.conflict.H6": "Teacher is unavailable in this slot",
   "dash.conflict.H7": "Teacher exceeds max hours per day",
+  "dash.conflict.H8": "Teacher exceeds max hours per week",
   "dash.conflict.generic": "Hard constraint violation",
+  "dash.print.docTitle": "Official Timetable Document",
+  "dash.print.institutionFallback": "School / College (set institution name)",
+  "dash.print.semesterLine": "Semester / Academic year: {semester}",
+  "dash.print.semesterFallback": "—",
+  "dash.print.weeklyTitle": "Weekly Teaching Timetable",
+  "dash.print.viewLine": "View: {view} · {name}",
+  "dash.print.seedLine": "Seed: {seed}",
+  "dash.print.generatedLine": "Printed at: {at}",
+  "dash.print.statsLine":
+    "{count} periods · Completion {rate}% · Hard conflicts {hard}",
   "dash.details": "Details",
 };
 

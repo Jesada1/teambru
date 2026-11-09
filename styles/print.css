@@ -4,6 +4,7 @@
   display: none;
 }
 
-.print-institution-header {
+.print-institution-header,
+.print-document-header {
   display: none;
 }

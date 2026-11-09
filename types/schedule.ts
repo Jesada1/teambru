@@ -25,6 +25,7 @@ export type ConstraintCode =
   | "H5"
   | "H6"
   | "H7"
+  | "H8"
   | "S1"
   | "S2"
   | "S3"

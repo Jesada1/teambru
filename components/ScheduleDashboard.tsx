@@ -311,6 +311,7 @@ const CONFLICT_KEYS: Partial<Record<ConstraintCode, TranslationKey>> = {
   H5: "dash.conflict.H5",
   H6: "dash.conflict.H6",
   H7: "dash.conflict.H7",
+  H8: "dash.conflict.H8",
 };
 
 export function ScheduleDashboard({
@@ -877,15 +878,58 @@ export function ScheduleDashboard({
     }
   };
 
+  const printGeneratedAt = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat("th-TH", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date());
+    } catch {
+      return new Date().toLocaleString();
+    }
+  }, [workingResult.seed, workingResult.assignments.length]);
+
+  const printEntityTitle =
+    view === "teacher"
+      ? t("dash.tab.teacher")
+      : view === "room"
+        ? t("dash.tab.room")
+        : t("dash.tab.classGroup");
+
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-3 p-3 pb-28 sm:p-5 md:pb-5">
-      <div className="print-institution-header">
-        {institutionName.trim() ? (
-          <span className="print-institution-name">{institutionName.trim()}</span>
-        ) : null}
-        {semesterLabel.trim() ? (
-          <span className="print-semester-label">{semesterLabel.trim()}</span>
-        ) : null}
+      <div className="print-document-header" aria-hidden="true">
+        <p className="print-doc-kicker">{t("dash.print.docTitle")}</p>
+        <p className="print-institution-name">
+          {institutionName.trim() || t("dash.print.institutionFallback")}
+        </p>
+        <p className="print-semester-label">
+          {t("dash.print.semesterLine", {
+            semester: semesterLabel.trim() || t("dash.print.semesterFallback"),
+          })}
+        </p>
+        <p className="print-doc-subtitle">{t("dash.print.weeklyTitle")}</p>
+        <div className="print-doc-meta">
+          <span>
+            {t("dash.print.viewLine", {
+              view: printEntityTitle,
+              name: activeEntityLabel,
+            })}
+          </span>
+          <span>
+            {t("dash.print.seedLine", { seed: workingResult.seed })}
+          </span>
+          <span>
+            {t("dash.print.generatedLine", { at: printGeneratedAt })}
+          </span>
+          <span>
+            {t("dash.print.statsLine", {
+              count: workingResult.assignments.length,
+              rate: Number(workingResult.completionRate ?? 0).toFixed(0),
+              hard: workingResult.hardConflictCount,
+            })}
+          </span>
+        </div>
       </div>
 
       <header className="flex flex-col gap-3 border-b border-zinc-200/80 pb-3">

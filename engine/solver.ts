@@ -38,6 +38,8 @@ interface Occupancy {
   groups: Set<string>;
   /** `${teacherId}|${day}` → periods already placed that day (H7) */
   teacherDayHours: Map<string, number>;
+  /** teacherId → cumulative weekly periods already placed (H8) */
+  teacherWeekHours: Map<string, number>;
 }
 
 /** Deterministic PRNG — same seed ⇒ same sequence */
@@ -73,6 +75,7 @@ function createOccupancy(): Occupancy {
     rooms: new Set(),
     groups: new Set(),
     teacherDayHours: new Map(),
+    teacherWeekHours: new Map(),
   };
 }
 
@@ -145,7 +148,8 @@ function isHardFeasible(
   demand: LessonDemand,
   candidate: Candidate,
   teacherUnavailable: Map<string, Set<string>>,
-  maxHoursByTeacher: Map<string, number>,
+  maxDayHoursByTeacher: Map<string, number>,
+  maxWeekHoursByTeacher: Map<string, number>,
   parallelPeers: Map<string, Set<string>>
 ): boolean {
   const { slotKey, roomId, timeSlot } = candidate;
@@ -176,9 +180,18 @@ function isHardFeasible(
 
   // H7 — maxHoursPerDay is strictly enforced during placement
   const dayKey = teacherDayKey(demand.teacherId, timeSlot.day);
-  const used = occupancy.teacherDayHours.get(dayKey) ?? 0;
-  const maxHours = maxHoursByTeacher.get(demand.teacherId) ?? Number.POSITIVE_INFINITY;
-  if (used + 1 > maxHours) {
+  const usedDay = occupancy.teacherDayHours.get(dayKey) ?? 0;
+  const maxDay =
+    maxDayHoursByTeacher.get(demand.teacherId) ?? Number.POSITIVE_INFINITY;
+  if (usedDay + 1 > maxDay) {
+    return false;
+  }
+
+  // H8 — maxHoursPerWeek is strictly enforced (cumulative across all days)
+  const usedWeek = occupancy.teacherWeekHours.get(demand.teacherId) ?? 0;
+  const maxWeek =
+    maxWeekHoursByTeacher.get(demand.teacherId) ?? Number.POSITIVE_INFINITY;
+  if (usedWeek + 1 > maxWeek) {
     return false;
   }
 
@@ -199,6 +212,10 @@ function place(
     dayKey,
     (occupancy.teacherDayHours.get(dayKey) ?? 0) + 1
   );
+  occupancy.teacherWeekHours.set(
+    demand.teacherId,
+    (occupancy.teacherWeekHours.get(demand.teacherId) ?? 0) + 1
+  );
 }
 
 function unplace(
@@ -211,9 +228,13 @@ function unplace(
   occupancy.rooms.delete(occupancyKey(roomId, slotKey));
   occupancy.groups.delete(occupancyKey(demand.classGroupId, slotKey));
   const dayKey = teacherDayKey(demand.teacherId, timeSlot.day);
-  const next = (occupancy.teacherDayHours.get(dayKey) ?? 1) - 1;
-  if (next <= 0) occupancy.teacherDayHours.delete(dayKey);
-  else occupancy.teacherDayHours.set(dayKey, next);
+  const nextDay = (occupancy.teacherDayHours.get(dayKey) ?? 1) - 1;
+  if (nextDay <= 0) occupancy.teacherDayHours.delete(dayKey);
+  else occupancy.teacherDayHours.set(dayKey, nextDay);
+
+  const nextWeek = (occupancy.teacherWeekHours.get(demand.teacherId) ?? 1) - 1;
+  if (nextWeek <= 0) occupancy.teacherWeekHours.delete(demand.teacherId);
+  else occupancy.teacherWeekHours.set(demand.teacherId, nextWeek);
 }
 
 function buildCandidates(
@@ -223,7 +244,8 @@ function buildCandidates(
   occupancy: Occupancy,
   rand: () => number,
   teacherUnavailable: Map<string, Set<string>>,
-  maxHoursByTeacher: Map<string, number>,
+  maxDayHoursByTeacher: Map<string, number>,
+  maxWeekHoursByTeacher: Map<string, number>,
   parallelPeers: Map<string, Set<string>>
 ): Candidate[] {
   const eligibleRooms = filterCandidateRooms(
@@ -247,7 +269,8 @@ function buildCandidates(
           demand,
           candidate,
           teacherUnavailable,
-          maxHoursByTeacher,
+          maxDayHoursByTeacher,
+          maxWeekHoursByTeacher,
           parallelPeers
         )
       ) {
@@ -315,7 +338,8 @@ function orderDemandsByMrv(
   occupancy: Occupancy,
   rand: () => number,
   teacherUnavailable: Map<string, Set<string>>,
-  maxHoursByTeacher: Map<string, number>,
+  maxDayHoursByTeacher: Map<string, number>,
+  maxWeekHoursByTeacher: Map<string, number>,
   parallelPeers: Map<string, Set<string>>
 ): LessonDemand[] {
   const scored = demands.map((demand) => ({
@@ -327,7 +351,8 @@ function orderDemandsByMrv(
       occupancy,
       () => 0.5,
       teacherUnavailable,
-      maxHoursByTeacher,
+      maxDayHoursByTeacher,
+      maxWeekHoursByTeacher,
       parallelPeers
     ).length,
     tie: rand(),
@@ -454,8 +479,9 @@ export function recomputeScheduleMetrics(
 /**
  * CSP backtracking solver with seeded heuristics and soft-constraint optimization.
  * Guarantees 0 hard conflicts for returned assignments by only placing via
- * occupancy-checked candidates (H1–H7). On timeout, returns the best feasible
- * partial schedule found so far (never an empty wipe when progress exists).
+ * occupancy-checked candidates (H1–H8). Early-stops on the first complete
+ * zero-conflict schedule (completionRate 100%). On timeout, returns the best
+ * feasible partial found so far.
  */
 export function solveSchedule(
   input: ScheduleInput,
@@ -468,8 +494,11 @@ export function solveSchedule(
   const teacherUnavailable = new Map(
     input.teachers.map((t) => [t.id, new Set(t.unavailableSlots as string[])])
   );
-  const maxHoursByTeacher = new Map(
+  const maxDayHoursByTeacher = new Map(
     input.teachers.map((t) => [t.id, t.maxHoursPerDay])
+  );
+  const maxWeekHoursByTeacher = new Map(
+    input.teachers.map((t) => [t.id, t.maxHoursPerWeek])
   );
   const roomsById = new Map(input.rooms.map((r) => [r.id, r]));
   const parallelPeers = buildParallelPeers(input.classGroups);
@@ -483,7 +512,8 @@ export function solveSchedule(
     createOccupancy(),
     rand,
     teacherUnavailable,
-    maxHoursByTeacher,
+    maxDayHoursByTeacher,
+    maxWeekHoursByTeacher,
     parallelPeers
   );
 
@@ -491,6 +521,7 @@ export function solveSchedule(
   let bestDepth = -1;
   let bestScore = -Infinity;
   let timedOut = false;
+  let foundComplete = false;
   let assignmentSeq = 0;
   let expansions = 0;
 
@@ -518,6 +549,8 @@ export function solveSchedule(
     partial: ScheduleAssignment[],
     occupancy: Occupancy
   ): void => {
+    if (foundComplete) return;
+
     expansions += 1;
     if (expansions % 64 === 0 && Date.now() >= deadline) {
       timedOut = true;
@@ -525,8 +558,10 @@ export function solveSchedule(
       return;
     }
 
+    // Early-stop: first complete hard-feasible assignment (100% coverage)
     if (index === demands.length) {
       considerPartial(partial, true);
+      foundComplete = true;
       return;
     }
 
@@ -538,7 +573,8 @@ export function solveSchedule(
       occupancy,
       rand,
       teacherUnavailable,
-      maxHoursByTeacher,
+      maxDayHoursByTeacher,
+      maxWeekHoursByTeacher,
       parallelPeers
     );
 
@@ -554,7 +590,7 @@ export function solveSchedule(
     }
 
     for (const candidate of candidates) {
-      if (timedOut) return;
+      if (foundComplete || timedOut) return;
       if (expansions % 64 === 0 && Date.now() >= deadline) {
         timedOut = true;
         considerPartial(partial, false);
@@ -579,7 +615,7 @@ export function solveSchedule(
       partial.pop();
       unplace(occupancy, demand, candidate);
 
-      if (timedOut) return;
+      if (foundComplete || timedOut) return;
     }
   };
 
@@ -637,7 +673,7 @@ export function solveSchedule(
  * Naive greedy baseline for competition benchmarks.
  * Only avoids basic double-booking (teacher/room/group) and ignores
  * unavailable slots, maxHoursPerDay, and preferred room types — so it
- * typically accumulates H4–H7 hard conflicts that CSP prevents.
+ * typically accumulates H4–H8 hard conflicts that CSP prevents.
  */
 export function solveNaiveGreedy(
   input: ScheduleInput,

@@ -14,6 +14,31 @@ import type { AgentConstraint } from "./agentSchema";
 
 const DYNAMIC_TIMEOUT_MS = 500;
 
+/**
+ * Cumulative weekly teaching hours for a teacher in the current draft.
+ * Used as a hard gate (H8) before sandbox mutations commit.
+ */
+export function countTeacherWeeklyHours(
+  assignments: ScheduleAssignment[],
+  teacherId: string
+): number {
+  return assignments.reduce(
+    (sum, a) => sum + (a.teacherId === teacherId ? 1 : 0),
+    0
+  );
+}
+
+/**
+ * Returns true when adding one more period would exceed maxHoursPerWeek.
+ */
+export function wouldExceedMaxHoursPerWeek(
+  assignments: ScheduleAssignment[],
+  teacherId: string,
+  maxHoursPerWeek: number
+): boolean {
+  return countTeacherWeeklyHours(assignments, teacherId) + 1 > maxHoursPerWeek;
+}
+
 export type AlgorithmMetrics = {
   label: "CSP" | "NaiveGreedy";
   hardConflictCount: number;
@@ -364,6 +389,9 @@ function applySubstitute(
           a.teacherId === teacher.id && a.timeSlot.day === constraint.day
       ).length;
       if (dayLoad + 1 > teacher.maxHoursPerDay) return false;
+      // H8 — cumulative weekly hours must stay within maxHoursPerWeek
+      const weekLoad = draft.filter((a) => a.teacherId === teacher.id).length;
+      if (weekLoad + 1 > teacher.maxHoursPerWeek) return false;
       return true;
     });
 
