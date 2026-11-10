@@ -1,0 +1,193 @@
+================================================================================
+ระบบจัดตารางสอนอัตโนมัติด้วย Hybrid AI & CSP Engine
+ข้อความสำหรับคัดลอกไปวางใน Canva (ทีละสไลด์)
+Live Demo: https://team-bru-seven.vercel.app
+================================================================================
+
+
+---------- สไลด์ 1 — ชื่อโปรเจกต์ ----------
+
+ระบบจัดตารางสอนอัตโนมัติด้วย Hybrid AI & CSP Engine
+
+LLM เข้าใจคำสั่ง — CSP รับประกันความถูกต้อง — Guardrails รับประกันความเสถียร
+
+Live Demo: https://team-bru-seven.vercel.app
+
+
+---------- สไลด์ 2 — ปัญหาที่แก้ ----------
+
+โจทย์จัดตารางสอน = ปัญหา NP-Hard
+
+ต้องจัดการพร้อมกัน:
+• ครู / ห้อง / กลุ่มเรียน
+• ประเภทห้อง (THEORY / LAB / SPECIFIC)
+• วันลาและช่วงเวลาไม่สะดวก
+• ชั่วโมงสูงสุดต่อวันและต่อสัปดาห์
+
+ถ้าใช้ AI เดาสุ่มอย่างเดียว
+→ ได้ตารางที่ดูสวย แต่ผิดเงื่อนไขได้
+
+
+---------- สไลด์ 3 — Tech Stack ----------
+
+Tech Stack ที่เลือกใช้
+
+Frontend: Next.js + React + TypeScript + Tailwind + Lucide
+Validation: Zod Schema Validation
+Engine: Symbolic AI / CSP Solver
+Agent: Natural Language Intent Parser (Plan → Act → Check)
+Export: jsPDF + AutoTable (Native PDF)
+Cloud: Vercel Auto-Deploy Pipeline
+
+ทำไมเลือกแบบนี้
+→ แยก “ภาษาคน” ออกจาก “ตรรกะที่พิสูจน์ได้”
+→ ดีพลอยบนคลาวด์และสาธิตกรรมการได้ทันที
+
+
+---------- สไลด์ 4 — Hybrid AI Architecture ----------
+
+Hybrid AI Architecture
+
+ชั้นที่ 1: Agent / NL Parser
+• รับคำสั่งภาษาคน เช่น “ครูสมชายลากิจคาบ 6”
+• แปลงเป็น JSON Rules
+• ตรวจด้วย Zod ก่อนเข้า Engine
+
+ชั้นที่ 2: CSP Deterministic Core
+• จัดตารางด้วยตรรกะเชิงสัญลักษณ์
+• บังคับ Hard Constraints H1–H8
+• ผลลัพธ์ทำซ้ำได้ด้วย Seed
+
+หลักการสำคัญ
+LLM ไม่ได้ตัดสินตารางเอง
+CSP คือ Authority of Truth
+
+
+---------- สไลด์ 5 — Plan → Act → Check ----------
+
+Pipeline 3 ขั้นตอน: Plan → Act → Check
+
+[PLAN]
+แปลงภาษาพูด → JSON Rules
+Validate ด้วย Zod Schema
+
+[ACT]
+ประมวลผลบน Sandbox Draft State
+งบเวลา 500ms
+
+[CHECK]
+ตรวจ Hard Constraints H1–H8
+ผ่าน → Commit
+ไม่ผ่าน / เกินเวลา → Auto-Rollback
+
+
+---------- สไลด์ 6 — Hard Constraints H1–H8 ----------
+
+Hard Constraints (Zero Conflicts)
+
+H1 ครูห้ามสอนซ้อนคาบ
+H2 ห้องห้ามใช้ซ้อนคาบ
+H3 กลุ่มเรียน (+ parallel) ห้ามเรียนซ้อน
+H4 ความจุห้องต้องพอ
+H5 ประเภทห้องต้องตรงวิชา
+H6 ห้ามจัดในช่วง unavailable ของครู
+H7 ไม่เกิน maxHoursPerDay
+H8 ไม่เกิน maxHoursPerWeek
+
+เป้าหมายผลลัพธ์ที่ Commit = 0 Hard Conflicts
+
+
+---------- สไลด์ 7 — System Stability ----------
+
+System Stability Guardrails
+
+• Solve Budget 3,000ms สำหรับ CSP เต็มระบบ
+• Early-Stop เมื่อได้ตารางครบและ Zero Conflicts
+• Partial Schedule Fallback รายงาน % ความครบถ้วน
+• Agent Budget 500ms + Auto-Rollback
+• Error Boundary กันแอปพังกลางเวที
+• Deterministic Seed ให้กรรมการทดสอบซ้ำได้
+
+
+---------- สไลด์ 8 — Benchmark ----------
+
+Benchmark: CSP Engine vs Naive Greedy
+
+CSP Engine
+• Backtracking + Domain Pruning + MRV
+• Soft Fitness Optimization
+• Hard Conflicts = 0 (บนผลที่ Commit)
+
+Naive Greedy
+• วางแบบโลภ เช็คเงื่อนไขบางส่วน
+• เร็ว แต่สะสม Conflict ได้ โดยเฉพาะ H4–H8
+
+สรุปบนเวที
+Naive อาจเร็วแต่ผิดเงื่อนไข
+CSP ถูกต้องและพิสูจน์ได้
+
+
+---------- สไลด์ 9 — จุดเด่นสำหรับกรรมการ ----------
+
+จุดเด่นสำหรับกรรมการ
+
+Judge Demo Mode (1-Click Role Switcher)
+• Academic Admin — เต็มสิทธิ์
+• Teacher — อ่านอย่างเดียว + อัปเดต Unavailable
+• Student — ดูตารางรายบุคคล
+
+Individual Student View
+• เลือกนักเรียน → กรองกลุ่มเรียน
+• ไฮไลต์วิชาที่ลงทะเบียน
+
+Native PDF Export
+• ดาวน์โหลด Timetable_Schedule_2026.pdf
+• มีหัวเอกสารสถาบันอย่างเป็นทางการ
+
+
+---------- สไลด์ 10 — Pitch 3 นาที ----------
+
+สวัสดีครับ/ค่ะ คณะกรรมการ
+
+โจทย์จัดตารางสอนคือปัญหา NP-Hard
+ถ้าจัดมือหรือใช้ AI เดาสุ่ม มักได้ตารางที่ดูสวยแต่ผิดเงื่อนไข
+
+ทีมเราจึงออกแบบแบบ Hybrid AI
+ชั้นแรกเป็น Natural Language Agent
+ให้ฝ่ายวิชาการพิมพ์ภาษาคน เช่น “ครูสมชายลากิจคาบ 6”
+ระบบแปลงเป็น JSON แล้วตรวจด้วย Zod
+
+ชั้นสองเป็น CSP Engine ซึ่งเป็น Symbolic AI แบบ Deterministic
+ใช้ Backtracking, การตัดโดเมนแบบ Forward Checking, heuristic MRV
+และ Soft Fitness โดยบังคับ Hard Constraints H1 ถึง H8
+
+จุดสำคัญคือเราไม่ปล่อยให้ภาษารูปแบบโมเดลเป็นคนตัดสินตาราง
+แต่ใช้ pipeline Plan → Act → Check บน Sandbox
+ถ้า CHECK ไม่ผ่านหรือเกินงบ 500 มิลลิวินาที ระบบ Rollback ทันที
+นี่คือวิธีกัน AI Hallucination เชิงระบบ
+
+ผลลัพธ์ที่ Commit มีเป้าหมาย Zero Hard Conflicts
+พร้อม Early-Stop และ Partial Fallback
+ถ้าเวลา 3 วินาทีหมด เรายังรายงาน % ความครบถ้วนอย่างตรงไปตรงมา
+
+บนหน้าจอมี Benchmark เทียบ CSP กับ Naive Greedy
+เป็นมิลลิวินาที จำนวน Conflict และ Fitness
+และมี Judge Demo Mode สลับสิทธิ์ Admin / Teacher / Student ได้ในคลิกเดียว
+รวมถึงตารางรายบุคคลนักเรียน และการส่งออก PDF จริง
+
+สรุปสั้น ๆ
+เราแปลงปัญหางานวิชาการจริง ให้เป็นระบบที่พูดภาษาคนได้
+แต่ตัดสินด้วยตรรกะที่พิสูจน์ได้
+พร้อมรันบนคลาวด์ให้คณะกรรมการทดลองได้ทันที
+ขอบคุณครับ/ค่ะ
+
+
+---------- สไลด์ปิด ----------
+
+One-liner
+
+LLM เข้าใจคำสั่ง
+CSP รับประกันความถูกต้อง
+Guardrails รับประกันความเสถียร
+
+Demo: https://team-bru-seven.vercel.app

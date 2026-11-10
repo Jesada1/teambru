@@ -47,6 +47,7 @@ export const subjectRowSchema = z.object({
   requiredRoomType: roomTypeSchema,
   assignedTeacherId: z.string().trim().min(1, "assignedTeacherId is required"),
   classGroupId: z.string().trim().min(1, "classGroupId is required"),
+  lockedSlots: csvListSchema.pipe(z.array(timeSlotTokenSchema)).default([]),
 });
 
 export const roomRowSchema = z.object({
@@ -54,6 +55,7 @@ export const roomRowSchema = z.object({
   name: z.string().trim().min(1, "Room name is required"),
   type: roomTypeSchema,
   capacity: positiveIntSchema,
+  unavailableSlots: csvListSchema.pipe(z.array(timeSlotTokenSchema)).default([]),
 });
 
 export const classGroupRowSchema = z.object({
@@ -62,6 +64,7 @@ export const classGroupRowSchema = z.object({
   studentCount: nonNegativeIntSchema,
   department: z.string().trim().min(1, "department is required"),
   parallelGroupIds: csvListSchema.default([]),
+  unavailableSlots: csvListSchema.pipe(z.array(timeSlotTokenSchema)).default([]),
 });
 
 export const timeSlotRowSchema = z.object({

@@ -24,7 +24,21 @@ export interface LessonDemand {
   studentCount: number;
   /** Parallel group ids that must not share this slot (H3) */
   parallelGroupIds: string[];
+  /** Hard-locked slots for this subject (H11); empty = unrestricted */
+  lockedSlots: string[];
 }
+
+/** Precomputed hard-gate lookups shared by candidate filtering / MRV */
+type HardGateMaps = {
+  teacherUnavailable: Map<string, Set<string>>;
+  groupUnavailable: Map<string, Set<string>>;
+  roomUnavailable: Map<string, Set<string>>;
+  /** slotKey → subject ids that reserve the slot via lockedSlots */
+  reservedSlotOwners: Map<string, Set<string>>;
+  maxDayHoursByTeacher: Map<string, number>;
+  maxWeekHoursByTeacher: Map<string, number>;
+  parallelPeers: Map<string, Set<string>>;
+};
 
 interface Candidate {
   timeSlot: TimeSlot;
@@ -93,6 +107,8 @@ export function expandLessonDemands(input: ScheduleInput): LessonDemand[] {
     const studentCount = group?.studentCount ?? 0;
     const parallelGroupIds = group?.parallelGroupIds ?? [];
 
+    const lockedSlots = (subject.lockedSlots ?? []).map(String);
+
     for (let i = 0; i < subject.periodsPerWeek; i++) {
       demands.push({
         id: `${subject.id}#${i + 1}`,
@@ -102,11 +118,50 @@ export function expandLessonDemands(input: ScheduleInput): LessonDemand[] {
         requiredRoomType: subject.requiredRoomType,
         studentCount,
         parallelGroupIds,
+        lockedSlots,
       });
     }
   }
 
   return demands;
+}
+
+function buildHardGateMaps(input: ScheduleInput): HardGateMaps {
+  const reservedSlotOwners = new Map<string, Set<string>>();
+  for (const subject of input.subjects) {
+    for (const slot of subject.lockedSlots ?? []) {
+      const key = String(slot);
+      const owners = reservedSlotOwners.get(key) ?? new Set<string>();
+      owners.add(subject.id);
+      reservedSlotOwners.set(key, owners);
+    }
+  }
+
+  return {
+    teacherUnavailable: new Map(
+      input.teachers.map((t) => [t.id, new Set(t.unavailableSlots as string[])])
+    ),
+    groupUnavailable: new Map(
+      input.classGroups.map((g) => [
+        g.id,
+        new Set((g.unavailableSlots ?? []) as string[]),
+      ])
+    ),
+    roomUnavailable: new Map(
+      input.rooms.map((r) => [
+        r.id,
+        new Set((r.unavailableSlots ?? []) as string[]),
+      ])
+    ),
+    reservedSlotOwners,
+    maxDayHoursByTeacher: new Map(
+      input.teachers.map((t) => [t.id, t.maxHoursPerDay])
+    ),
+    maxWeekHoursByTeacher: new Map(
+      input.teachers.map((t) => [t.id, t.maxHoursPerWeek])
+    ),
+    parallelPeers: buildParallelPeers(input.classGroups),
+  };
 }
 
 /** H4 + H5 room pre-filter */
@@ -147,10 +202,7 @@ function isHardFeasible(
   occupancy: Occupancy,
   demand: LessonDemand,
   candidate: Candidate,
-  teacherUnavailable: Map<string, Set<string>>,
-  maxDayHoursByTeacher: Map<string, number>,
-  maxWeekHoursByTeacher: Map<string, number>,
-  parallelPeers: Map<string, Set<string>>
+  gates: HardGateMaps
 ): boolean {
   const { slotKey, roomId, timeSlot } = candidate;
 
@@ -164,7 +216,7 @@ function isHardFeasible(
     return false; // H3
   }
   const peers =
-    parallelPeers.get(demand.classGroupId) ??
+    gates.parallelPeers.get(demand.classGroupId) ??
     new Set(demand.parallelGroupIds);
   for (const parallelId of peers) {
     if (occupancy.groups.has(occupancyKey(parallelId, slotKey))) {
@@ -172,26 +224,50 @@ function isHardFeasible(
     }
   }
 
-  // H6 — unavailable slots are strictly forbidden
-  const unavailable = teacherUnavailable.get(demand.teacherId);
-  if (unavailable?.has(slotKey)) {
+  // H6 — teacher unavailable
+  if (gates.teacherUnavailable.get(demand.teacherId)?.has(slotKey)) {
     return false;
   }
 
-  // H7 — maxHoursPerDay is strictly enforced during placement
+  // H7 — maxHoursPerDay
   const dayKey = teacherDayKey(demand.teacherId, timeSlot.day);
   const usedDay = occupancy.teacherDayHours.get(dayKey) ?? 0;
   const maxDay =
-    maxDayHoursByTeacher.get(demand.teacherId) ?? Number.POSITIVE_INFINITY;
+    gates.maxDayHoursByTeacher.get(demand.teacherId) ??
+    Number.POSITIVE_INFINITY;
   if (usedDay + 1 > maxDay) {
     return false;
   }
 
-  // H8 — maxHoursPerWeek is strictly enforced (cumulative across all days)
+  // H8 — maxHoursPerWeek
   const usedWeek = occupancy.teacherWeekHours.get(demand.teacherId) ?? 0;
   const maxWeek =
-    maxWeekHoursByTeacher.get(demand.teacherId) ?? Number.POSITIVE_INFINITY;
+    gates.maxWeekHoursByTeacher.get(demand.teacherId) ??
+    Number.POSITIVE_INFINITY;
   if (usedWeek + 1 > maxWeek) {
+    return false;
+  }
+
+  // H9 — class group unavailable
+  if (gates.groupUnavailable.get(demand.classGroupId)?.has(slotKey)) {
+    return false;
+  }
+
+  // H10 — room unavailable
+  if (gates.roomUnavailable.get(roomId)?.has(slotKey)) {
+    return false;
+  }
+
+  // H11 — locked / reserved slots
+  if (demand.lockedSlots.length > 0 && !demand.lockedSlots.includes(slotKey)) {
+    return false;
+  }
+  const reservedOwners = gates.reservedSlotOwners.get(slotKey);
+  if (
+    reservedOwners &&
+    reservedOwners.size > 0 &&
+    !reservedOwners.has(demand.subjectId)
+  ) {
     return false;
   }
 
@@ -243,10 +319,7 @@ function buildCandidates(
   rooms: Room[],
   occupancy: Occupancy,
   rand: () => number,
-  teacherUnavailable: Map<string, Set<string>>,
-  maxDayHoursByTeacher: Map<string, number>,
-  maxWeekHoursByTeacher: Map<string, number>,
-  parallelPeers: Map<string, Set<string>>
+  gates: HardGateMaps
 ): Candidate[] {
   const eligibleRooms = filterCandidateRooms(
     rooms,
@@ -263,17 +336,7 @@ function buildCandidates(
         roomId: room.id,
         slotKey: key,
       };
-      if (
-        isHardFeasible(
-          occupancy,
-          demand,
-          candidate,
-          teacherUnavailable,
-          maxDayHoursByTeacher,
-          maxWeekHoursByTeacher,
-          parallelPeers
-        )
-      ) {
+      if (isHardFeasible(occupancy, demand, candidate, gates)) {
         candidates.push(candidate);
       }
     }
@@ -337,10 +400,7 @@ function orderDemandsByMrv(
   rooms: Room[],
   occupancy: Occupancy,
   rand: () => number,
-  teacherUnavailable: Map<string, Set<string>>,
-  maxDayHoursByTeacher: Map<string, number>,
-  maxWeekHoursByTeacher: Map<string, number>,
-  parallelPeers: Map<string, Set<string>>
+  gates: HardGateMaps
 ): LessonDemand[] {
   const scored = demands.map((demand) => ({
     demand,
@@ -350,15 +410,19 @@ function orderDemandsByMrv(
       rooms,
       occupancy,
       () => 0.5,
-      teacherUnavailable,
-      maxDayHoursByTeacher,
-      maxWeekHoursByTeacher,
-      parallelPeers
+      gates
     ).length,
+    // Prefer locked-slot demands first when option counts tie
+    lockedPriority: demand.lockedSlots.length > 0 ? 0 : 1,
     tie: rand(),
   }));
 
-  scored.sort((a, b) => a.options - b.options || a.tie - b.tie);
+  scored.sort(
+    (a, b) =>
+      a.options - b.options ||
+      a.lockedPriority - b.lockedPriority ||
+      a.tie - b.tie
+  );
   return scored.map((s) => s.demand);
 }
 
@@ -479,7 +543,7 @@ export function recomputeScheduleMetrics(
 /**
  * CSP backtracking solver with seeded heuristics and soft-constraint optimization.
  * Guarantees 0 hard conflicts for returned assignments by only placing via
- * occupancy-checked candidates (H1–H8). Early-stops on the first complete
+ * occupancy-checked candidates (H1–H11). Early-stops on the first complete
  * zero-conflict schedule (completionRate 100%). On timeout, returns the best
  * feasible partial found so far.
  */
@@ -491,17 +555,8 @@ export function solveSchedule(
   const deadline = startedAt + TIME_LIMIT_MS;
   const rand = mulberry32(seed);
 
-  const teacherUnavailable = new Map(
-    input.teachers.map((t) => [t.id, new Set(t.unavailableSlots as string[])])
-  );
-  const maxDayHoursByTeacher = new Map(
-    input.teachers.map((t) => [t.id, t.maxHoursPerDay])
-  );
-  const maxWeekHoursByTeacher = new Map(
-    input.teachers.map((t) => [t.id, t.maxHoursPerWeek])
-  );
+  const gates = buildHardGateMaps(input);
   const roomsById = new Map(input.rooms.map((r) => [r.id, r]));
-  const parallelPeers = buildParallelPeers(input.classGroups);
 
   let demands = expandLessonDemands(input);
   demands = shuffleInPlace(demands.slice(), rand);
@@ -511,10 +566,7 @@ export function solveSchedule(
     input.rooms,
     createOccupancy(),
     rand,
-    teacherUnavailable,
-    maxDayHoursByTeacher,
-    maxWeekHoursByTeacher,
-    parallelPeers
+    gates
   );
 
   let bestAssignments: ScheduleAssignment[] = [];
@@ -572,10 +624,7 @@ export function solveSchedule(
       input.rooms,
       occupancy,
       rand,
-      teacherUnavailable,
-      maxDayHoursByTeacher,
-      maxWeekHoursByTeacher,
-      parallelPeers
+      gates
     );
 
     candidates.sort((a, b) => {

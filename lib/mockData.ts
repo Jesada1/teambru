@@ -103,6 +103,7 @@ export function generateRooms(count: number): Room[] {
       name: `${type === "LAB" ? "Lab" : type === "SPECIFIC" ? "Special" : "Room"} ${n}`,
       type,
       capacity: type === "LAB" ? 30 + (n % 3) * 5 : 40 + (n % 4) * 10,
+      unavailableSlots: [],
     };
   });
 }
@@ -120,6 +121,7 @@ export function generateClassGroups(count: number): ClassGroup[] {
       studentCount: 20 + (n % 15),
       department,
       parallelGroupIds: parallelPartner ? [parallelPartner] : [],
+      unavailableSlots: [],
     };
   });
 }
@@ -145,8 +147,192 @@ export function generateSubjects(
       requiredRoomType,
       assignedTeacherId: teacher.id,
       classGroupId: classGroup.id,
+      lockedSlots: [],
     };
   });
+}
+
+/**
+ * Competition / judge scenario: อ.ธัญลักษณ์ — 8 subjects with
+ * group unavailable (สทลส.11 Tue morning), classroom unavailable (Wed PM),
+ * and activity locked to FRI_P7|FRI_P8.
+ */
+export function generateThanyalakScenario(): ScheduleInput {
+  const teacherId = "T_THANYALAK";
+  const teachers: Teacher[] = [
+    {
+      id: teacherId,
+      name: "นางสาวธัญลักษณ์ ปรือปรัง",
+      maxHoursPerDay: 8,
+      maxHoursPerWeek: 40,
+      unavailableSlots: [],
+    },
+  ];
+
+  const classGroups: ClassGroup[] = [
+    {
+      id: "G11",
+      groupName: "สทลส.11",
+      studentCount: 35,
+      department: "IT",
+      parallelGroupIds: [],
+      unavailableSlots: ["TUE_P1", "TUE_P2", "TUE_P3"],
+    },
+    {
+      id: "G12",
+      groupName: "สทลส.12",
+      studentCount: 35,
+      department: "IT",
+      parallelGroupIds: [],
+      unavailableSlots: [],
+    },
+    {
+      id: "G21",
+      groupName: "สทลส.21",
+      studentCount: 35,
+      department: "IT",
+      parallelGroupIds: ["G22"],
+      unavailableSlots: [],
+    },
+    {
+      id: "G22",
+      groupName: "สทลส.22",
+      studentCount: 35,
+      department: "IT",
+      parallelGroupIds: ["G21"],
+      unavailableSlots: [],
+    },
+  ];
+
+  const rooms: Room[] = [
+    {
+      id: "R_CLASS_1",
+      name: "ห้องเรียน-1",
+      type: "THEORY",
+      capacity: 40,
+      unavailableSlots: ["WED_P5", "WED_P6", "WED_P7", "WED_P8"],
+    },
+    {
+      id: "R_CLASS_2",
+      name: "ห้องเรียน-2",
+      type: "THEORY",
+      capacity: 40,
+      unavailableSlots: ["WED_P5", "WED_P6", "WED_P7", "WED_P8"],
+    },
+    {
+      id: "R_LAB_1",
+      name: "LAB-IT-01",
+      type: "LAB",
+      capacity: 40,
+      unavailableSlots: [],
+    },
+    {
+      id: "R_LAB_2",
+      name: "LAB-IT-02",
+      type: "LAB",
+      capacity: 40,
+      unavailableSlots: [],
+    },
+    {
+      id: "R_SPEC_1",
+      name: "ห้องโครงงาน",
+      type: "SPECIFIC",
+      capacity: 40,
+      unavailableSlots: [],
+    },
+  ];
+
+  const subjects: Subject[] = [
+    {
+      id: "S_DEVOPS",
+      code: "31901-2008",
+      name: "การพัฒนาซอฟต์แวร์รูปแบบเดฟออปส์",
+      periodsPerWeek: 5,
+      requiredRoomType: "LAB",
+      assignedTeacherId: teacherId,
+      classGroupId: "G22",
+      lockedSlots: [],
+    },
+    {
+      id: "S_PROJECT",
+      code: "31901-2015",
+      name: "โครงงานด้านเทคโนโลยีสารสนเทศ",
+      periodsPerWeek: 4,
+      requiredRoomType: "SPECIFIC",
+      assignedTeacherId: teacherId,
+      classGroupId: "G21",
+      lockedSlots: [],
+    },
+    {
+      id: "S_ACTIVITY",
+      code: "30000-2003",
+      name: "กิจกรรมองค์การวิชาชีพ 2",
+      periodsPerWeek: 2,
+      requiredRoomType: "THEORY",
+      assignedTeacherId: teacherId,
+      classGroupId: "G21",
+      lockedSlots: ["FRI_P7", "FRI_P8"],
+    },
+    {
+      id: "S_UI",
+      code: "31901-2001",
+      name: "การออกแบบส่วนติดต่อผู้ใช้ขั้นสูง",
+      periodsPerWeek: 3,
+      requiredRoomType: "LAB",
+      assignedTeacherId: teacherId,
+      classGroupId: "G12",
+      lockedSlots: [],
+    },
+    {
+      id: "S_BACKEND",
+      code: "31901-2005",
+      name: "การพัฒนาซอฟต์แวร์ด้วยเทคโนโลยี Back-End",
+      periodsPerWeek: 5,
+      requiredRoomType: "LAB",
+      assignedTeacherId: teacherId,
+      classGroupId: "G11",
+      lockedSlots: [],
+    },
+    {
+      id: "S_DB",
+      code: "31901-2007",
+      name: "เทคโนโลยีการจัดการฐานข้อมูล",
+      periodsPerWeek: 5,
+      requiredRoomType: "LAB",
+      assignedTeacherId: teacherId,
+      classGroupId: "G11",
+      lockedSlots: [],
+    },
+    {
+      id: "S_MEDIA",
+      code: "31900-1003",
+      name: "การสร้างสื่อดิจิทัล",
+      periodsPerWeek: 5,
+      requiredRoomType: "LAB",
+      assignedTeacherId: teacherId,
+      classGroupId: "G11",
+      lockedSlots: [],
+    },
+    {
+      id: "S_GAME",
+      code: "31905-2010",
+      name: "การผลิตเกมคอมพิวเตอร์",
+      periodsPerWeek: 5,
+      requiredRoomType: "LAB",
+      assignedTeacherId: teacherId,
+      classGroupId: "G22",
+      lockedSlots: [],
+    },
+  ];
+
+  return {
+    teachers,
+    subjects,
+    rooms,
+    classGroups,
+    timeSlots: generateDefaultTimeSlots(),
+    students: synthesizeStudentsFromGroups(classGroups),
+  };
 }
 
 export function generateMockDataset(size: DatasetSize): ScheduleInput {

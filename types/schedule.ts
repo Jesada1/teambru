@@ -26,6 +26,9 @@ export type ConstraintCode =
   | "H6"
   | "H7"
   | "H8"
+  | "H9"
+  | "H10"
+  | "H11"
   | "S1"
   | "S2"
   | "S3"
@@ -59,6 +62,12 @@ export interface Subject {
   assignedTeacherId: string;
   /** Class group that takes this subject (used for CSP demand expansion) */
   classGroupId: string;
+  /**
+   * Hard-locked periods for this subject (e.g. activity FRI_P7|FRI_P8).
+   * When set, the subject may only be placed in these slots, and other
+   * subjects may not occupy them (H11).
+   */
+  lockedSlots?: TimeSlotId[];
 }
 
 export interface Room {
@@ -66,6 +75,8 @@ export interface Room {
   name: string;
   type: RoomType;
   capacity: number;
+  /** Slots when this room cannot be used (H10) */
+  unavailableSlots?: TimeSlotId[];
 }
 
 export interface ClassGroup {
@@ -75,6 +86,8 @@ export interface ClassGroup {
   department: string;
   /** Parallel groups that must not overlap in time */
   parallelGroupIds: string[];
+  /** Slots when this class group cannot attend (H9) */
+  unavailableSlots?: TimeSlotId[];
 }
 
 /** Individual student enrolled in a class group */

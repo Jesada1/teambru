@@ -23,11 +23,7 @@ import {
   timeSlotRowSchema,
   timeSlotUniqueKey,
   validateEntityRows,
-  type ClassGroupRow,
-  type RoomRow,
   type RowValidationIssue,
-  type SubjectRow,
-  type TeacherRow,
   type TimeSlotRow,
 } from "./validations/upload";
 
@@ -61,14 +57,16 @@ const ENTITY_HEADERS: Record<UploadEntityKind, string[]> = {
     "requiredRoomType",
     "assignedTeacherId",
     "classGroupId",
+    "lockedSlots",
   ],
-  room: ["id", "name", "type", "capacity"],
+  room: ["id", "name", "type", "capacity", "unavailableSlots"],
   classGroup: [
     "id",
     "groupName",
     "studentCount",
     "department",
     "parallelGroupIds",
+    "unavailableSlots",
   ],
   timeSlot: ["day", "period", "startTime", "endTime"],
 };
@@ -478,6 +476,7 @@ export function scheduleInputToCsv(input: ScheduleInput): string {
       "requiredRoomType",
       "assignedTeacherId",
       "classGroupId",
+      "lockedSlots",
       "type",
       "capacity",
       "groupName",
@@ -515,6 +514,7 @@ export function scheduleInputToCsv(input: ScheduleInput): string {
         "",
         "",
         "",
+        "",
       ]
         .map(escape)
         .join(",")
@@ -535,6 +535,7 @@ export function scheduleInputToCsv(input: ScheduleInput): string {
         s.requiredRoomType,
         s.assignedTeacherId,
         s.classGroupId,
+        (s.lockedSlots ?? []).join("|"),
         "",
         "",
         "",
@@ -559,6 +560,7 @@ export function scheduleInputToCsv(input: ScheduleInput): string {
         r.name,
         "",
         "",
+        (r.unavailableSlots ?? []).join("|"),
         "",
         "",
         "",
@@ -589,6 +591,7 @@ export function scheduleInputToCsv(input: ScheduleInput): string {
         "",
         "",
         "",
+        (g.unavailableSlots ?? []).join("|"),
         "",
         "",
         "",
@@ -615,6 +618,7 @@ export function scheduleInputToCsv(input: ScheduleInput): string {
     lines.push(
       [
         "timeSlot",
+        "",
         "",
         "",
         "",
@@ -682,6 +686,7 @@ export async function downloadExcelTemplate(
     requiredRoomType: s.requiredRoomType,
     assignedTeacherId: s.assignedTeacherId,
     classGroupId: s.classGroupId,
+    lockedSlots: (s.lockedSlots ?? []).join("|"),
   }));
 
   const rooms = input.rooms.map((r) => ({
@@ -689,6 +694,7 @@ export async function downloadExcelTemplate(
     name: r.name,
     type: r.type,
     capacity: r.capacity,
+    unavailableSlots: (r.unavailableSlots ?? []).join("|"),
   }));
 
   const classGroups = input.classGroups.map((g) => ({
@@ -697,6 +703,7 @@ export async function downloadExcelTemplate(
     studentCount: g.studentCount,
     department: g.department,
     parallelGroupIds: g.parallelGroupIds.join("|"),
+    unavailableSlots: (g.unavailableSlots ?? []).join("|"),
   }));
 
   const timeSlots = input.timeSlots.map((s) => ({
@@ -792,9 +799,9 @@ export function buildScheduleInputFromState(
 
   const input: ScheduleInput = {
     teachers: teachersResult.data as unknown as Teacher[],
-    subjects: subjectsResult.data as SubjectRow[],
-    rooms: roomsResult.data as RoomRow[],
-    classGroups: groupsResult.data as ClassGroupRow[],
+    subjects: subjectsResult.data as unknown as ScheduleInput["subjects"],
+    rooms: roomsResult.data as unknown as ScheduleInput["rooms"],
+    classGroups: groupsResult.data as unknown as ScheduleInput["classGroups"],
     timeSlots,
   };
 

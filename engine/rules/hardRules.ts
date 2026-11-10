@@ -364,6 +364,131 @@ export class TeacherMaxHoursPerWeekRule implements HardConstraintRule {
   }
 }
 
+/**
+ * H9 — Class group must not be scheduled in any `unavailableSlots` entry.
+ */
+export class ClassGroupUnavailableRule implements HardConstraintRule {
+  readonly code = "H9" as const;
+  readonly name = "Class Group Unavailable Slot";
+  readonly description = "ห้ามจัดคาบในช่วงที่กลุ่มเรียนไม่ว่าง";
+  readonly severity = "HARD" as const;
+
+  evaluate(context: ConstraintContext): RuleEvaluationResult {
+    const conflicts: ConflictReport[] = [];
+
+    for (const a of context.assignments) {
+      const group = context.classGroupsById.get(a.classGroupId);
+      if (!group) continue;
+      const unavailable = (group.unavailableSlots ?? []) as string[];
+      if (!unavailable.length) continue;
+      const key = slotKey(a.timeSlot.day, a.timeSlot.period);
+      if (!unavailable.includes(key)) continue;
+
+      conflicts.push(
+        makeConflict(
+          "H9",
+          `Class group "${group.groupName}" is unavailable at ${key}`,
+          [a.id],
+          { classGroupId: group.id, subjectId: a.subjectId }
+        )
+      );
+    }
+
+    return emptyHardResult(conflicts);
+  }
+}
+
+/**
+ * H10 — Room must not be used in any `unavailableSlots` entry.
+ */
+export class RoomUnavailableRule implements HardConstraintRule {
+  readonly code = "H10" as const;
+  readonly name = "Room Unavailable Slot";
+  readonly description = "ห้ามใช้ห้องในช่วงที่ห้องไม่ว่าง";
+  readonly severity = "HARD" as const;
+
+  evaluate(context: ConstraintContext): RuleEvaluationResult {
+    const conflicts: ConflictReport[] = [];
+
+    for (const a of context.assignments) {
+      const room = context.roomsById.get(a.roomId);
+      if (!room) continue;
+      const unavailable = (room.unavailableSlots ?? []) as string[];
+      if (!unavailable.length) continue;
+      const key = slotKey(a.timeSlot.day, a.timeSlot.period);
+      if (!unavailable.includes(key)) continue;
+
+      conflicts.push(
+        makeConflict(
+          "H10",
+          `Room "${room.name}" is unavailable at ${key}`,
+          [a.id],
+          { roomId: room.id, subjectId: a.subjectId }
+        )
+      );
+    }
+
+    return emptyHardResult(conflicts);
+  }
+}
+
+/**
+ * H11 — Subjects with lockedSlots may only occupy those slots;
+ * reserved locked slots cannot be taken by other subjects.
+ */
+export class SubjectLockedSlotRule implements HardConstraintRule {
+  readonly code = "H11" as const;
+  readonly name = "Subject Locked Slot";
+  readonly description = "วิชาที่ล็อกคาบต้องอยู่เฉพาะช่วงที่กำหนด และห้ามวิชาอื่นทับ";
+  readonly severity = "HARD" as const;
+
+  evaluate(context: ConstraintContext): RuleEvaluationResult {
+    const conflicts: ConflictReport[] = [];
+    const reservedOwners = new Map<string, Set<string>>();
+
+    for (const subject of context.subjectsById.values()) {
+      const locked = (subject.lockedSlots ?? []) as string[];
+      for (const slot of locked) {
+        const owners = reservedOwners.get(slot) ?? new Set<string>();
+        owners.add(subject.id);
+        reservedOwners.set(slot, owners);
+      }
+    }
+
+    for (const a of context.assignments) {
+      const subject = context.subjectsById.get(a.subjectId);
+      if (!subject) continue;
+      const key = slotKey(a.timeSlot.day, a.timeSlot.period);
+      const locked = (subject.lockedSlots ?? []) as string[];
+
+      if (locked.length > 0 && !locked.includes(key)) {
+        conflicts.push(
+          makeConflict(
+            "H11",
+            `Subject "${subject.code}" must stay in locked slots (${locked.join(", ")}), got ${key}`,
+            [a.id],
+            { subjectId: subject.id, classGroupId: a.classGroupId }
+          )
+        );
+      }
+
+      const owners = reservedOwners.get(key);
+      if (owners && owners.size > 0 && !owners.has(a.subjectId)) {
+        conflicts.push(
+          makeConflict(
+            "H11",
+            `Slot ${key} is reserved for locked subject(s) and cannot host "${subject.code}"`,
+            [a.id],
+            { subjectId: subject.id }
+          )
+        );
+      }
+    }
+
+    return emptyHardResult(conflicts);
+  }
+}
+
 export const hardRules: HardConstraintRule[] = [
   new TeacherOverlapRule(),
   new RoomOverlapRule(),
@@ -373,4 +498,7 @@ export const hardRules: HardConstraintRule[] = [
   new TeacherUnavailableRule(),
   new TeacherMaxHoursPerDayRule(),
   new TeacherMaxHoursPerWeekRule(),
+  new ClassGroupUnavailableRule(),
+  new RoomUnavailableRule(),
+  new SubjectLockedSlotRule(),
 ];

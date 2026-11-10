@@ -13,7 +13,12 @@ import { AlertTriangle, FileSpreadsheet, Sparkles, Wand2, Zap } from "lucide-rea
 import { useLanguage } from "../context/LanguageContext";
 import { useToast } from "../context/ToastContext";
 import { solveSchedule } from "../engine/solver";
-import { generateMediumDataset, DATASET_ROW_TARGETS, type DatasetSize } from "../lib/mockData";
+import {
+  generateMediumDataset,
+  generateThanyalakScenario,
+  DATASET_ROW_TARGETS,
+  type DatasetSize,
+} from "../lib/mockData";
 import {
   buildParsedUploadState,
   buildScheduleInputFromState,
@@ -54,6 +59,7 @@ const PREVIEW_COLUMNS = [
   "requiredRoomType",
   "assignedTeacherId",
   "classGroupId",
+  "lockedSlots",
   "unavailableSlots",
 ] as const;
 
@@ -326,6 +332,12 @@ export function FileUpload({
     solveFromInput(input, "toast.demoDone");
   }, [pushToast, t, solveFromInput]);
 
+  const handleThanyalakScenario = useCallback(() => {
+    pushToast(t("upload.scenarioThanyalakHint"), "info");
+    const input = generateThanyalakScenario();
+    solveFromInput(input, "toast.demoDone");
+  }, [pushToast, t, solveFromInput]);
+
   useEffect(() => {
     return () => clearProgressTimer();
   }, [clearProgressTimer]);
@@ -366,19 +378,30 @@ export function FileUpload({
               {t("upload.quickDemoHint")}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleQuickDemo}
-            disabled={solving}
-            className="inline-flex min-h-[48px] w-full shrink-0 items-center justify-center rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-transform duration-150 hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
-          >
-            {solving ? (
-              <Sparkles className="mr-2 h-4 w-4 shrink-0 text-emerald-200" />
-            ) : (
-              <Zap className="mr-2 h-4 w-4 shrink-0 text-amber-300" />
-            )}
-            {solving ? t("upload.generating") : t("upload.quickDemo")}
-          </button>
+          <div className="flex w-full flex-col gap-2 md:w-auto">
+            <button
+              type="button"
+              onClick={handleQuickDemo}
+              disabled={solving}
+              className="inline-flex min-h-[48px] w-full shrink-0 items-center justify-center rounded-md bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-transform duration-150 hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {solving ? (
+                <Sparkles className="mr-2 h-4 w-4 shrink-0 text-emerald-200" />
+              ) : (
+                <Zap className="mr-2 h-4 w-4 shrink-0 text-amber-300" />
+              )}
+              {solving ? t("upload.generating") : t("upload.quickDemo")}
+            </button>
+            <button
+              type="button"
+              onClick={handleThanyalakScenario}
+              disabled={solving}
+              className="inline-flex min-h-[44px] w-full shrink-0 items-center justify-center rounded-md border border-amber-500/35 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-950 transition-transform duration-150 hover:bg-amber-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              title={t("upload.scenarioThanyalakHint")}
+            >
+              {t("upload.scenarioThanyalak")}
+            </button>
+          </div>
         </div>
       </section>
 

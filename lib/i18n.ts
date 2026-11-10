@@ -5,7 +5,7 @@ export type TranslationKey = keyof typeof th;
 const th = {
   // —— App / Nav ——
   "app.title": "ระบบจัดตารางสอนอัตโนมัติด้วย AI",
-  "app.subtitle": "ตัวแก้ปัญหา CSP · ข้อจำกัดแข็ง H1–H8",
+  "app.subtitle": "ตัวแก้ปัญหา CSP · ข้อจำกัดแข็ง H1–H11",
   "app.seed": "ชุดค่าสุ่ม Seed",
   "app.seedCustom": "กำหนดเอง",
   "app.seedAria": "เลือกชุดค่าสุ่ม",
@@ -241,6 +241,12 @@ const th = {
   "dash.conflict.H6": "ครูไม่สะดวกในช่วงเวลานี้ (unavailable)",
   "dash.conflict.H7": "ครูสอนเกินชั่วโมงสูงสุดต่อวัน",
   "dash.conflict.H8": "ครูสอนเกินชั่วโมงสูงสุดต่อสัปดาห์",
+  "dash.conflict.H9": "กลุ่มเรียนไม่ว่างในช่วงเวลานี้",
+  "dash.conflict.H10": "ห้องเรียนไม่ว่างในช่วงเวลานี้",
+  "dash.conflict.H11": "คาบถูกล็อกสำหรับวิชาเฉพาะ (เช่น กิจกรรมองค์การวิชาชีพ)",
+  "upload.scenarioThanyalak": "เทสโจทย์อ.ธัญลักษณ์ (H9–H11)",
+  "upload.scenarioThanyalakHint":
+    "โหลดเคสจริง: สทลส.11 ไม่ว่างอังคารเช้า · ห้องเรียนไม่ว่างพุธบ่าย · ศุกร์ P7–P8 = กิจกรรม",
   "dash.conflict.generic": "ละเมิดข้อจำกัดแข็งของตาราง",
   "dash.print.docTitle": "เอกสารตารางสอนอย่างเป็นทางการ",
   "dash.print.institutionFallback": "โรงเรียน / วิทยาลัย (ระบุชื่อสถานศึกษา)",
@@ -257,7 +263,7 @@ const th = {
 
 const en: Record<TranslationKey, string> = {
   "app.title": "AI Automated Timetable System",
-  "app.subtitle": "CSP solver · Hard constraints H1–H8",
+  "app.subtitle": "CSP solver · Hard constraints H1–H11",
   "app.seed": "Seed",
   "app.seedCustom": "Custom",
   "app.seedAria": "Seed preset",
@@ -491,6 +497,12 @@ const en: Record<TranslationKey, string> = {
   "dash.conflict.H6": "Teacher is unavailable in this slot",
   "dash.conflict.H7": "Teacher exceeds max hours per day",
   "dash.conflict.H8": "Teacher exceeds max hours per week",
+  "dash.conflict.H9": "Class group is unavailable in this slot",
+  "dash.conflict.H10": "Room is unavailable in this slot",
+  "dash.conflict.H11": "Slot is locked for a specific subject (e.g. activity)",
+  "upload.scenarioThanyalak": "Thanyalak scenario test (H9–H11)",
+  "upload.scenarioThanyalakHint":
+    "Load real case: สทลส.11 unavailable Tue morning · classroom unavailable Wed PM · Fri P7–P8 = activity",
   "dash.conflict.generic": "Hard constraint violation",
   "dash.print.docTitle": "Official Timetable Document",
   "dash.print.institutionFallback": "School / College (set institution name)",

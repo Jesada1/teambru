@@ -319,6 +319,9 @@ const CONFLICT_KEYS: Partial<Record<ConstraintCode, TranslationKey>> = {
   H6: "dash.conflict.H6",
   H7: "dash.conflict.H7",
   H8: "dash.conflict.H8",
+  H9: "dash.conflict.H9",
+  H10: "dash.conflict.H10",
+  H11: "dash.conflict.H11",
 };
 
 export function ScheduleDashboard({
